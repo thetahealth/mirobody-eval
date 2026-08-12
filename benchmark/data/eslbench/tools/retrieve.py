@@ -37,6 +37,10 @@ _BLOCKED_FILES = {"events.json"}
 _BLOCKED_PREFIXES = ("kg_evaluation_queries", ".")
 _FORBIDDEN_SQL = {"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE"}
 _BLOCKED_TABLES = {"evaluation_queries"}
+_UNICODE_SQL_HINT = (
+    "查询含非法 Unicode 字节（可能是被截断的多字节字符），"
+    "请用完整、干净的 UTF-8 重写 WHERE 条件后重试，或改用 lookup_indicator 工具。"
+)
 
 _MAX_READ_FILE_CHARS = 16000
 _MAX_SEARCH_OUTPUT_CHARS = 4000
@@ -482,6 +486,29 @@ def _date_prefix(value: Any) -> str:
     """将日期/时间统一裁剪到 YYYY-MM-DD。"""
     text = "" if value is None else str(value).strip()
     return text[:10] if len(text) >= 10 else text
+
+
+def _ensure_utf8_sql(sql_clean: str) -> str | None:
+    """校验 SQL 为干净的 UTF-8；不干净则返回 hint，否则返回 None。
+
+    模型写出的 SQL 若含被截断的多字节字符（孤立代理项等），在 con.execute
+    时会触发 UnicodeEncodeError。此处提前拦截，便于在不依赖 DB / @tool /
+    runtime 图的情况下单元测试。
+    """
+    try:
+        sql_clean.encode("utf-8")
+        return None
+    except UnicodeError:
+        return _UNICODE_SQL_HINT
+
+
+def _is_unicode_error(e: BaseException) -> bool:
+    """判断异常是否为（编解码或 DuckDB 报出的）非法 Unicode 错误。"""
+    return (
+        isinstance(e, UnicodeError)
+        or "Invalid unicode" in str(e)
+        or "byte sequence mismatch" in str(e)
+    )
 
 
 def _execute_duckdb_with_timeout(
@@ -1750,6 +1777,10 @@ def query_duckdb(sql: str, runtime: ToolRuntime[ToolContext]) -> str:
     if not sql_clean:
         return "错误: SQL 不能为空"
 
+    hint = _ensure_utf8_sql(sql_clean)
+    if hint:
+        return hint
+
     # Prefix check 前 strip 掉开头的 "-- " 注释行（合法 SQL 注释，不应触发拒绝）
     prefix_check = sql_clean
     while True:
@@ -1788,6 +1819,8 @@ def query_duckdb(sql: str, runtime: ToolRuntime[ToolContext]) -> str:
         finally:
             con.close()
     except Exception as e:
+        if _is_unicode_error(e):
+            return _UNICODE_SQL_HINT
         return f"SQL 执行错误: {e}"
 
     if not rows:

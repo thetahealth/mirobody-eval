@@ -25,12 +25,15 @@ import json
 import os
 from pathlib import Path
 
+from evaluator.utils import paths
+
 HF_REPO = os.getenv("ESLBENCH_HF_REPO", os.getenv("THETAGEN_HF_REPO", "healthmemoryarena/ESL-Bench"))
 
 # ==================== ESLBench 默认路径 ====================
 
 BENCHMARK_DIR = Path(__file__).resolve().parents[2] / "benchmark" / "data" / "eslbench"
-DATA_DIR = BENCHMARK_DIR / ".data"
+# DATA_DIR: prod 下读 HOLYEVAL_USER_DATA_DIR/eslbench；dev 下回退 BENCHMARK_DIR/.data
+DATA_DIR = paths.user_data_dir("eslbench")
 
 # ==================== 共享工具函数 ====================
 

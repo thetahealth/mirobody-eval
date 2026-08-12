@@ -60,6 +60,9 @@ class TaskEntry:
     total: int = 0
     completed: int = 0
     eval_results: list[TestResult] = field(default_factory=list)
+    # generic task-lifecycle webhook (透明转发, 不感知具体订阅者)
+    callback_url: str | None = None
+    callback_secret: str | None = None
 
     def _release_heavy_data(self) -> None:
         """Release heavy objects, keep only lightweight metadata for API queries"""
@@ -212,6 +215,9 @@ class TaskManager:
         dataset: str,
         results: list[ApiCallResult],
         max_concurrency: int = 5,
+        *,
+        callback_url: str | None = None,
+        callback_secret: str | None = None,
     ) -> tuple["TaskEntry", dict]:
         """Create eval-only task — runs evaluation only, no dialogue loop
 
@@ -262,6 +268,8 @@ class TaskManager:
             benchmark=benchmark,
             dataset=dataset,
             total=len(items),
+            callback_url=callback_url,
+            callback_secret=callback_secret,
         )
         self._tasks[task_id] = entry
 
@@ -342,12 +350,17 @@ class TaskManager:
                 entry.task_id, len(report.cases), len(missed_items or []),
                 len(all_results), bench_report.avg_score,
             )
+            # Fire-and-forget webhook (no-op when callback_url 未设置)
+            from web.app.services.webhook import fire_task_webhook
+            asyncio.create_task(fire_task_webhook(entry))
             entry._release_heavy_data()
 
         except Exception as e:
             logger.error("Eval-only task failed: %s - %s", entry.task_id, e, exc_info=True)
             entry.status = "error"
             entry.error = str(e)
+            from web.app.services.webhook import fire_task_webhook
+            asyncio.create_task(fire_task_webhook(entry))
             entry._release_heavy_data()
 
     async def _run_session(

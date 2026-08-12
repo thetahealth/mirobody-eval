@@ -87,6 +87,9 @@ class EvalOnlyRequest(BaseModel):
     dataset: str
     results: list[ApiCallResult]
     max_concurrency: int = 5
+    # 通用 webhook 回调 (调用方可选; Python 完全不感知具体订阅者)
+    callback_url: str | None = None  # 任务完成/失败时 POST 到此 URL
+    callback_secret: str | None = None  # 作为 X-Webhook-Secret header 透传给订阅方校验
 
 
 class EvalOnlyResponse(BaseModel):

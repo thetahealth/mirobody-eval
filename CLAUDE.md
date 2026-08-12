@@ -17,8 +17,6 @@ python -m benchmark.basic_runner healthbench sample --target-model gpt-4.1
 python -m benchmark.basic_runner healthbench full --target-model gpt-4.1 --limit 50
 python -m benchmark.basic_runner healthbench hard --target-model gemini-3-pro -p 5
 python -m benchmark.basic_runner medcalc sample --target-model gpt-4.1
-python -m benchmark.basic_runner agentclinic medqa --target-model gpt-4.1
-python -m benchmark.basic_runner memoryarena sample --target-model gpt-4.1
 python -m benchmark.basic_runner eslbench sample50-20260324 --target-model gpt-4.1        # ESLBench quick (50 cases)
 python -m benchmark.basic_runner eslbench full-20260324 --target-model gpt-4.1 -p 5       # ESLBench full (1800 cases)
 python -m benchmark.basic_runner healthbench sample --target-model gpt-4.1 --ids hb_abc
@@ -32,10 +30,6 @@ python -m generator.eslbench.prepare_data --force    # force re-download + rebui
 # Data conversion (external datasets → HolyEval format)
 python -m generator.healthbench.converter input.jsonl output.jsonl --target-model gpt-4.1
 python -m generator.medcalc.converter
-python -m generator.agentclinic.converter <input.jsonl> <output.jsonl>
-python -m generator.medhall.data_gen --count 15 --output generator/medhall/raw_data.jsonl
-python -m generator.medhall.converter generator/medhall/raw_data.jsonl benchmark/data/medhall/theta.jsonl
-python -m generator.memoryarena.converter
 
 # Web UI
 python -m web    # uvicorn :8000, auto-reload
@@ -88,7 +82,7 @@ Plugins activate on import (in `evaluator/plugin/`). The `core/` layer depends o
 |---|---|---|
 | **TestAgent** (virtual user) | `core/interfaces/abstract_test_agent.py` | `auto` (LLM-driven), `manual` (scripted) |
 | **TargetAgent** (system under test) | `core/interfaces/abstract_target_agent.py` | `llm_api` (OpenAI/Gemini) |
-| **EvalAgent** (evaluator) | `core/interfaces/abstract_eval_agent.py` | `semantic`, `healthbench`, `medcalc`, `hallucination`, `kg_qa`, `memoryarena` |
+| **EvalAgent** (evaluator) | `core/interfaces/abstract_eval_agent.py` | `semantic`, `healthbench`, `medcalc`, `kg_qa` |
 
 Add custom plugins by inheriting from the abstract base classes. Use `/add-eval-agent` or `/add-target-agent` skills for guided scaffolding.
 
@@ -131,11 +125,7 @@ benchmark/
 │   │   ├── tools/        # retrieve.py — JSON lookup + DuckDB query tools
 │   │   └── .data/        # Downloaded user data + DuckDB (auto-created by prepare_data)
 │   ├── healthbench/      # HealthBench medical AI
-│   ├── medcalc/          # MedCalc-Bench calculations
-│   ├── agentclinic/      # AgentClinic clinical diagnosis
-│   ├── medhall/          # MedHall hallucination detection
-│   ├── memoryarena/      # MemoryArena agent memory
-│   └── history_demo/     # $ref demo
+│   └── medcalc/          # MedCalc-Bench calculations
 ├── report/               # Output reports
 └── basic_runner.py       # CLI runner
 ```
@@ -177,9 +167,6 @@ Key fields:
 - **`generator/eslbench/prepare_data.py`** — ESLBench data preparation: HuggingFace download + per-user DuckDB creation
 - **`generator/healthbench/converter.py`** — HealthBench JSONL → BenchItem
 - **`generator/medcalc/converter.py`** — MedCalc-Bench CSV → BenchItem
-- **`generator/agentclinic/converter.py`** — AgentClinic JSONL → BenchItem
-- **`generator/medhall/converter.py`** — MedHall JSONL → BenchItem
-- **`generator/memoryarena/converter.py`** — MemoryArena HuggingFace → BenchItem
 
 ### Web UI
 

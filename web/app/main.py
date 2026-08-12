@@ -13,6 +13,7 @@ from fastapi.templating import Jinja2Templates
 import evaluator.plugin.eval_agent  # noqa: F401
 import evaluator.plugin.target_agent  # noqa: F401
 import evaluator.plugin.test_agent  # noqa: F401
+from evaluator.utils import paths
 
 from web.app.api import agents, benchmarks, guides, reports, tasks
 from web.app.services.prepare_manager import prepare_manager
@@ -26,6 +27,8 @@ templates = Jinja2Templates(directory=str(_WEB_DIR / "templates"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 启动横幅：把 HOLYEVAL_* env 解析结果打到日志，便于排查 PVC / .env 配置
+    paths.log_resolved_paths()
     # On startup: scan and run benchmark prepare scripts (non-blocking, background)
     await prepare_manager.start_all()
     yield

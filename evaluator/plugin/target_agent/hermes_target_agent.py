@@ -42,7 +42,6 @@ Infrastructure params (read from .env):
 
 import logging
 import uuid
-from pathlib import Path
 from typing import Literal, Optional
 
 import aiohttp
@@ -52,12 +51,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from evaluator.core.interfaces.abstract_target_agent import AbstractTargetAgent
 from evaluator.core.schema import TargetAgentReaction, TestAgentAction
+from evaluator.utils import paths
 from evaluator.utils.config import get_config
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_BASE_URL = "http://127.0.0.1:8642"
-_BENCHMARK_DATA_DIR = Path(__file__).resolve().parents[3] / "benchmark" / "data"
 
 
 class HermesTargetInfo(BaseModel):
@@ -121,13 +120,22 @@ class HermesTargetAgent(AbstractTargetAgent, name="hermes", params_model=HermesT
         # 如果有 user_email，解析 data_dir 并注入 system_prompt
         if self.config.user_email:
             user_dir = self.config.user_email.replace("@", "_AT_")
-            data_dir = _BENCHMARK_DATA_DIR / "eslbench" / ".data" / user_dir
+            data_dir = paths.user_data_dir("eslbench") / user_dir
             data_block = f"\n\nUser data directory: {data_dir}"
             if self.config.system_prompt:
                 self.config = self.config.model_copy(update={"system_prompt": self.config.system_prompt + data_block})
             else:
                 self.config = self.config.model_copy(update={"system_prompt": data_block.strip()})
-            logger.info("[HermesTargetAgent] Data directory injected: %s (exists=%s)", data_dir, data_dir.is_dir())
+            logger.info(
+                "[HermesTargetAgent] user_dir=%s exists=%s",
+                data_dir,
+                data_dir.is_dir(),
+            )
+            if not data_dir.is_dir():
+                logger.warning(
+                    "[HermesTargetAgent] error_code=USER_DIR_NOT_FOUND user_dir=%s data_group=eslbench",
+                    data_dir,
+                )
 
         # Session management
         self._session_id = f"holyeval_{uuid.uuid4().hex}"

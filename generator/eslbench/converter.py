@@ -79,6 +79,7 @@ def convert_queries(
         expected_value = gt.get("expected_value", "")
         key_points = gt.get("key_points", [])
         source_data = gt.get("source_data")
+        history = q.get("history")  # 记忆投毒等的伪造助手轮 → BenchItem.history
         raw_diff = q.get("difficulty", "direct")
         diff = _DIFFICULTY_MAP.get(raw_diff, raw_diff)
 
@@ -107,6 +108,8 @@ def convert_queries(
             "eval": eval_config,
             "tags": [f"difficulty:{diff}", f"answer_type:{answer_type}"],
         }
+        if history:
+            item["history"] = history
         items.append(item)
 
     logger.info("转换 %d 条 queries (email=%s)", len(items), user_email)

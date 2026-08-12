@@ -94,6 +94,8 @@ async def create_eval_only_task(req: EvalOnlyRequest):
             dataset=req.dataset,
             results=req.results,
             max_concurrency=req.max_concurrency,
+            callback_url=req.callback_url,
+            callback_secret=req.callback_secret,
         )
     except (FileNotFoundError, ValueError) as e:
         raise HTTPException(status_code=400, detail=str(e))

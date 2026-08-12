@@ -83,6 +83,7 @@ async def do_execute(
     timeout: int | None = None,
     tool_context: Any | None = None,
     tool_context_schema: type | None = None,
+    temperature: float | None = None,
 ) -> ExecuteResult:
     """
     调用大模型
@@ -136,7 +137,15 @@ async def do_execute(
 
     # ---- 1. 判断 provider，拼装模型参数 ----
 
-    if model.startswith("gpt"):
+    _NOVA_BARE = {"glm-5.2"}  # nova per-call 中转仅有裸名(无 [次] 渠道)的模型
+    use_nova = False
+    if model.startswith("[") or model in _NOVA_BARE:
+        # nova per-call 中转(OpenAI 兼容);[次]/[限时] 前缀或 nova 裸名。
+        # base_url/key 走 GEMINI_BASE_URL/GEMINI_API_KEY(见下 init_kwargs)。
+        provider = "openai"
+        use_openrouter = False
+        use_nova = True
+    elif model.startswith("gpt"):
         # OpenAI 原生模型
         provider = "openai"
         use_openrouter = False
@@ -190,6 +199,10 @@ async def do_execute(
         **model_kwargs,
     }
 
+    # 可选:确定性采样(opt-in)。temperature=0 消除同题重跑的生成随机性,用于可复现评测。
+    if temperature is not None:
+        init_kwargs["temperature"] = temperature
+
     # OpenAI + reasoning_effort + tools → 必须使用 Responses API
     if provider == "openai" and not use_openrouter and thinking_level is not None and tools:
         init_kwargs["use_responses_api"] = True
@@ -200,6 +213,13 @@ async def do_execute(
 
         init_kwargs["base_url"] = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
         init_kwargs["api_key"] = os.getenv("OPENROUTER_API_KEY")
+
+    # nova per-call 中转配置（[次]/[限时] 前缀或 nova 裸名）
+    if use_nova:
+        import os
+
+        init_kwargs["base_url"] = os.getenv("GEMINI_BASE_URL", "https://once.novai.su/v1")
+        init_kwargs["api_key"] = os.getenv("GEMINI_API_KEY")
 
     llm = init_chat_model(**init_kwargs)
 
@@ -244,6 +264,12 @@ async def do_execute(
                 invoke_kwargs: dict[str, Any] = {}
                 if tool_context is not None:
                     invoke_kwargs["context"] = tool_context
+                # opt-in:调高 ReAct 递归上限(默认 25=langgraph 默认)。弱模型(flash)工具循环多,
+                # 25 步会在产出最终答案前被截断→末条 AIMessage 只剩 tool_calls、content 空。
+                import os as _os_rl
+                _rl = _os_rl.environ.get("AGENT_RECURSION_LIMIT")
+                if _rl:
+                    invoke_kwargs["recursion_limit"] = int(_rl)
                 result = await asyncio.wait_for(agent.ainvoke({"messages": messages}, **invoke_kwargs), timeout=timeout)
             cb_usage = cb.usage_metadata
             break

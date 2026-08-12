@@ -13,6 +13,7 @@ NaiveRagApiTargetAgent — 朴素向量检索增强问答（纯 embedding + cosi
 与 HippoRAG 的区别: 无 OpenIE、无知识图谱、无 PPR 图检索。
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -30,14 +31,20 @@ from evaluator.core.schema import (
     TargetAgentReaction,
     TestAgentAction,
 )
+from evaluator.utils import paths
 from evaluator.utils.llm import BasicMessage, do_execute
 
 logger = logging.getLogger(__name__)
 
+# 缓存固定写入仓库内 benchmark/data/<bench>/.X_work_dirs/，跟 user_data 物理分离（不挂 PVC）
 _BENCHMARK_DATA_DIR = Path(__file__).resolve().parents[3] / "benchmark" / "data"
 
-# 全局向量索引缓存: {cache_key: (chunks, embeddings)}
-_INDEX_CACHE: dict[str, tuple[list[str], list[list[float]]]] = {}
+# Embedding 维度统一为 1536（text-embedding-3-large 显式降维），减少存储和计算成本
+EMBEDDING_DIM = 1536
+
+# Per-user 锁：防止同一用户的并发首次构建撞车（首批 N 个 case 各自打 N×embedding API）。
+# Key=user_dir。asyncio 单线程，dict 的 get/setdefault 无 race。
+_INDEX_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 # ============================================================
@@ -158,7 +165,9 @@ async def _get_embeddings(texts: list[str], model: str = "text-embedding-3-large
     for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
         batch = [t[:24000] if len(t) > 24000 else t for t in batch]
-        resp = await client.embeddings.create(input=batch, model=model)
+        resp = await client.embeddings.create(
+            input=batch, model=model, dimensions=EMBEDDING_DIM
+        )
         all_embeddings.extend([d.embedding for d in resp.data])
 
     return all_embeddings
@@ -173,59 +182,61 @@ def _chunks_hash(chunks: list[str]) -> str:
 
 async def _build_or_get_index(
     user_dir: Path,
+    data_group: str,
     embedding_model: str,
 ) -> tuple[list[str], list[list[float]]]:
-    """构建或获取用户的向量索引（内存缓存 + 磁盘持久化）"""
+    """构建或获取用户的向量索引（磁盘持久化，不驻留内存）"""
     import numpy as np
 
-    cache_key = f"naive:{user_dir}:{embedding_model}"
+    lock_key = f"{user_dir}:{embedding_model}"
+    lock = _INDEX_LOCKS.get(lock_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _INDEX_LOCKS[lock_key] = lock
 
-    if cache_key in _INDEX_CACHE:
-        logger.debug("[NaiveRAG] Index memory cache hit for %s", user_dir.name)
-        return _INDEX_CACHE[cache_key]
+    async with lock:
+        chunks = _flatten_load(user_dir)
+        if not chunks:
+            raise FileNotFoundError(f"用户数据目录为空: {user_dir}")
 
-    chunks = _flatten_load(user_dir)
-    if not chunks:
-        raise FileNotFoundError(f"用户数据目录为空: {user_dir}")
+        # --- 磁盘缓存 ---
+        work_dir = _BENCHMARK_DATA_DIR / data_group / ".naive_rag_work_dirs" / user_dir.name
+        meta_file = work_dir / "index_meta.json"
+        chunks_file = work_dir / "chunks.json"
+        emb_file = work_dir / "chunk_embeddings.npz"
 
-    # --- 磁盘缓存 ---
-    work_dir = user_dir.parent.parent / ".naive_rag_work_dirs" / user_dir.name
-    meta_file = work_dir / "index_meta.json"
-    chunks_file = work_dir / "chunks.json"
-    emb_file = work_dir / "chunk_embeddings.npz"
+        current_hash = _chunks_hash(chunks)
 
-    current_hash = _chunks_hash(chunks)
+        if meta_file.exists() and chunks_file.exists() and emb_file.exists():
+            with open(meta_file, encoding="utf-8") as f:
+                meta = json.load(f)
+            # meta 中无 dimensions 字段视为 1536（向后兼容旧 cache）
+            cached_dim = meta.get("dimensions", EMBEDDING_DIM)
+            if (meta.get("chunks_hash") == current_hash
+                    and meta.get("embedding_model") == embedding_model
+                    and cached_dim == EMBEDDING_DIM):
+                logger.info("[NaiveRAG] Index disk cache hit for %s", user_dir.name)
+                with open(chunks_file, encoding="utf-8") as f:
+                    cdata = json.load(f)
+                embeddings = np.load(emb_file)["embeddings"].tolist()
+                return (cdata["chunks"], embeddings)
+            else:
+                logger.info("[NaiveRAG] Index disk cache invalid, rebuilding %s", user_dir.name)
 
-    if meta_file.exists() and chunks_file.exists() and emb_file.exists():
-        with open(meta_file, encoding="utf-8") as f:
-            meta = json.load(f)
-        if meta.get("chunks_hash") == current_hash and meta.get("embedding_model") == embedding_model:
-            logger.info("[NaiveRAG] Index disk cache hit for %s", user_dir.name)
-            with open(chunks_file, encoding="utf-8") as f:
-                cdata = json.load(f)
-            embeddings = np.load(emb_file)["embeddings"].tolist()
-            result = (cdata["chunks"], embeddings)
-            _INDEX_CACHE[cache_key] = result
-            return result
-        else:
-            logger.info("[NaiveRAG] Index disk cache invalid, rebuilding %s", user_dir.name)
+        # --- 构建 ---
+        logger.info("[NaiveRAG] Indexing %d chunks for %s (model=%s, dim=%d)",
+                    len(chunks), user_dir.name, embedding_model, EMBEDDING_DIM)
+        embeddings = await _get_embeddings(chunks, model=embedding_model)
 
-    # --- 构建 ---
-    logger.info("[NaiveRAG] Indexing %d chunks for %s (model=%s)", len(chunks), user_dir.name, embedding_model)
-    embeddings = await _get_embeddings(chunks, model=embedding_model)
-
-    # --- 保存 ---
-    work_dir.mkdir(parents=True, exist_ok=True)
-    with open(meta_file, "w", encoding="utf-8") as f:
-        json.dump({"chunks_hash": current_hash, "embedding_model": embedding_model}, f)
-    with open(chunks_file, "w", encoding="utf-8") as f:
-        json.dump({"chunks": chunks}, f, ensure_ascii=False)
-    np.savez_compressed(str(emb_file), embeddings=np.array(embeddings, dtype=np.float32))
-    logger.info("[NaiveRAG] Index saved to disk: %s", work_dir)
-
-    result = (chunks, embeddings)
-    _INDEX_CACHE[cache_key] = result
-    return result
+        # --- 保存 ---
+        work_dir.mkdir(parents=True, exist_ok=True)
+        with open(meta_file, "w", encoding="utf-8") as f:
+            json.dump({"chunks_hash": current_hash, "embedding_model": embedding_model, "dimensions": EMBEDDING_DIM}, f)
+        with open(chunks_file, "w", encoding="utf-8") as f:
+            json.dump({"chunks": chunks}, f, ensure_ascii=False)
+        np.savez_compressed(str(emb_file), embeddings=np.array(embeddings, dtype=np.float32))
+        logger.info("[NaiveRAG] Index saved to disk: %s", work_dir)
+        return (chunks, embeddings)
 
 
 async def _retrieve(
@@ -335,9 +346,19 @@ class NaiveRagApiTargetAgent(AbstractTargetAgent, name="naive_rag_api", params_m
         self._user_dir: Path | None = None
         if target_config.user_email:
             dir_name = _email_to_dir(target_config.user_email)
-            self._user_dir = _BENCHMARK_DATA_DIR / target_config.data_group / ".data" / dir_name
+            self._user_dir = paths.user_data_dir(target_config.data_group) / dir_name
+            logger.info(
+                "[NaiveRAG] user_dir=%s exists=%s data_group=%s",
+                self._user_dir,
+                self._user_dir.is_dir(),
+                target_config.data_group,
+            )
             if not self._user_dir.is_dir():
-                logger.warning("[NaiveRAG] 用户数据目录不存在: %s", self._user_dir)
+                logger.warning(
+                    "[NaiveRAG] error_code=USER_DIR_NOT_FOUND user_dir=%s data_group=%s",
+                    self._user_dir,
+                    target_config.data_group,
+                )
 
         self._cost = UsageMetadata(input_tokens=0, output_tokens=0, total_tokens=0)
 
@@ -368,6 +389,7 @@ class NaiveRagApiTargetAgent(AbstractTargetAgent, name="naive_rag_api", params_m
         # 1. 构建/获取向量索引
         chunks, embeddings = await _build_or_get_index(
             self._user_dir,
+            data_group=self.config.data_group,
             embedding_model=self.config.embedding_model,
         )
 

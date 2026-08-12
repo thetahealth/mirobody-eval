@@ -38,15 +38,21 @@ from evaluator.core.schema import (
     TargetAgentReaction,
     TestAgentAction,
 )
+from evaluator.utils import paths
 from evaluator.utils.llm import BasicMessage, do_execute
 
 logger = logging.getLogger(__name__)
 
-# benchmark/data/ directory
+# 缓存固定写入仓库内 benchmark/data/<bench>/.X_work_dirs/，跟 user_data 物理分离（不挂 PVC）
 _BENCHMARK_DATA_DIR = Path(__file__).resolve().parents[3] / "benchmark" / "data"
 
-# Global vector index cache: {cache_key: (chunks, embeddings)}
-_INDEX_CACHE: dict[str, tuple[list[str], list[list[float]], set[int]]] = {}
+# Embedding 维度统一为 1536（text-embedding-3-large 显式降维），减少存储和计算成本
+EMBEDDING_DIM = 1536
+
+# Per-user 锁：防止同一用户的并发首次构建撞车（一个 user 5 个 case 并发各打 5 次 embedding）。
+# 分两组锁：向量索引 vs 图（不同阶段不互锁，避免无谓串行）。
+_INDEX_LOCKS: dict[str, asyncio.Lock] = {}
+_GRAPH_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 # ============================================================
@@ -314,7 +320,9 @@ async def _get_embeddings(texts: list[str], model: str = "text-embedding-3-large
         # Truncate overly long text (embedding API limit: 8191 tokens)
         # text-embedding-3-large max 8191 tokens, conservatively truncate at 3 chars/token
         batch = [t[:24000] if len(t) > 24000 else t for t in batch]
-        resp = await client.embeddings.create(input=batch, model=model)
+        resp = await client.embeddings.create(
+            input=batch, model=model, dimensions=EMBEDDING_DIM
+        )
         all_embeddings.extend([d.embedding for d in resp.data])
 
     return all_embeddings
@@ -322,87 +330,105 @@ async def _get_embeddings(texts: list[str], model: str = "text-embedding-3-large
 
 async def _build_or_get_index(
     user_dir: Path,
+    data_group: str,
     max_chunk_chars: int,
     embedding_model: str,
-) -> tuple[list[str], list[list[float]], set[int]]:
-    """Build or get user's vector index (memory cache + disk persistence)
+) -> tuple[list[str], "np.ndarray", set[int]]:
+    """Build or get user's vector index (磁盘持久化，不驻留内存)
 
-    Returns (chunks, embeddings, openie_indices)
+    Returns (chunks, embeddings_np, openie_indices)
+
+    embeddings 保持 numpy float32 ndarray —— 不 .tolist()，避免 N×D Python list 的
+    8× 对象头膨胀（1172×1536 float32 ≈ 7 MB 的 ndarray，转成 Python list 直奔 55 MB）。
+    并发跑多用户时这是 hippo 内存的主要来源，能把单 case 工作集压到 1/8。
     """
     import numpy as np
 
-    cache_key = f"{user_dir}:{max_chunk_chars}:{embedding_model}"
+    lock_key = f"{user_dir}:{max_chunk_chars}:{embedding_model}"
+    lock = _INDEX_LOCKS.get(lock_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _INDEX_LOCKS[lock_key] = lock
 
-    if cache_key in _INDEX_CACHE:
-        logger.debug("[HippoRAG] Index memory cache hit for %s", user_dir.name)
-        return _INDEX_CACHE[cache_key]
+    async with lock:
+        docs, openie_indices = _load_user_documents(user_dir, max_chunk_chars=max_chunk_chars)
+        if not docs:
+            raise FileNotFoundError(f"User data directory is empty: {user_dir}")
 
-    docs, openie_indices = _load_user_documents(user_dir, max_chunk_chars=max_chunk_chars)
-    if not docs:
-        raise FileNotFoundError(f"User data directory is empty: {user_dir}")
+        # --- Disk cache check ---
+        work_dir = _BENCHMARK_DATA_DIR / data_group / ".hippo_work_dirs" / user_dir.name
+        meta_file = work_dir / "index_meta.json"
+        chunks_file = work_dir / "chunks.json"
+        emb_file = work_dir / "chunk_embeddings.npz"
 
-    # --- Disk cache check ---
-    work_dir = user_dir.parent.parent / ".hippo_work_dirs" / user_dir.name
-    meta_file = work_dir / "index_meta.json"
-    chunks_file = work_dir / "chunks.json"
-    emb_file = work_dir / "chunk_embeddings.npz"
+        current_hash = _chunks_hash(docs)
 
-    current_hash = _chunks_hash(docs)
+        if meta_file.exists() and chunks_file.exists() and emb_file.exists():
+            with open(meta_file, encoding="utf-8") as f:
+                meta = json.load(f)
+            # meta 中无 dimensions 字段视为 1536（向后兼容旧 cache）
+            cached_dim = meta.get("dimensions", EMBEDDING_DIM)
+            if (meta.get("chunks_hash") == current_hash
+                    and meta.get("embedding_model") == embedding_model
+                    and meta.get("max_chunk_chars") == max_chunk_chars
+                    and cached_dim == EMBEDDING_DIM):
+                logger.info("[HippoRAG] Index disk cache hit for %s", user_dir.name)
+                with open(chunks_file, encoding="utf-8") as f:
+                    cdata = json.load(f)
+                embeddings_np = np.load(emb_file)["embeddings"].astype(np.float32, copy=False)
+                return (cdata["chunks"], embeddings_np, set(cdata["openie_indices"]))
+            else:
+                logger.info("[HippoRAG] Index disk cache invalid (hash/model/dim changed), rebuilding %s", user_dir.name)
 
-    if meta_file.exists() and chunks_file.exists() and emb_file.exists():
-        with open(meta_file, encoding="utf-8") as f:
-            meta = json.load(f)
-        if (meta.get("chunks_hash") == current_hash
-                and meta.get("embedding_model") == embedding_model
-                and meta.get("max_chunk_chars") == max_chunk_chars):
-            logger.info("[HippoRAG] Index disk cache hit for %s", user_dir.name)
-            with open(chunks_file, encoding="utf-8") as f:
-                cdata = json.load(f)
-            embeddings = np.load(emb_file)["embeddings"].tolist()
-            result = (cdata["chunks"], embeddings, set(cdata["openie_indices"]))
-            _INDEX_CACHE[cache_key] = result
-            return result
-        else:
-            logger.info("[HippoRAG] Index disk cache invalid (hash/model changed), rebuilding %s", user_dir.name)
+        # --- Normal build ---
+        logger.info(
+            "[HippoRAG] Indexing %d chunks for %s (OpenIE: %d, embedding-only: %d, model=%s, dim=%d)",
+            len(docs), user_dir.name, len(openie_indices), len(docs) - len(openie_indices),
+            embedding_model, EMBEDDING_DIM,
+        )
+        embeddings = await _get_embeddings(docs, model=embedding_model)
+        embeddings_np = np.array(embeddings, dtype=np.float32)
+        del embeddings  # API 返回的 list 立刻释放，只保留 ndarray
 
-    # --- Normal build ---
-    logger.info(
-        "[HippoRAG] Indexing %d chunks for %s (OpenIE: %d, embedding-only: %d, model=%s)",
-        len(docs), user_dir.name, len(openie_indices), len(docs) - len(openie_indices), embedding_model,
-    )
-    embeddings = await _get_embeddings(docs, model=embedding_model)
+        # --- Save to disk ---
+        work_dir.mkdir(parents=True, exist_ok=True)
+        with open(meta_file, "w", encoding="utf-8") as f:
+            json.dump({
+                "chunks_hash": current_hash, "embedding_model": embedding_model,
+                "max_chunk_chars": max_chunk_chars, "dimensions": EMBEDDING_DIM,
+            }, f)
+        with open(chunks_file, "w", encoding="utf-8") as f:
+            json.dump({"chunks": docs, "openie_indices": list(openie_indices)}, f, ensure_ascii=False)
+        np.savez_compressed(str(emb_file), embeddings=embeddings_np)
+        logger.info("[HippoRAG] Index saved to disk: %s", work_dir)
 
-    # --- Save to disk ---
-    work_dir.mkdir(parents=True, exist_ok=True)
-    with open(meta_file, "w", encoding="utf-8") as f:
-        json.dump({"chunks_hash": current_hash, "embedding_model": embedding_model, "max_chunk_chars": max_chunk_chars}, f)
-    with open(chunks_file, "w", encoding="utf-8") as f:
-        json.dump({"chunks": docs, "openie_indices": list(openie_indices)}, f, ensure_ascii=False)
-    np.savez_compressed(str(emb_file), embeddings=np.array(embeddings, dtype=np.float32))
-    logger.info("[HippoRAG] Index saved to disk: %s", work_dir)
-
-    result = (docs, embeddings, openie_indices)
-    _INDEX_CACHE[cache_key] = result
-    return result
+        return (docs, embeddings_np, openie_indices)
 
 
 async def _retrieve(
     query: str,
     chunks: list[str],
-    embeddings: list[list[float]],
+    embeddings,  # np.ndarray (N, D) float32 — 历史接口可能传 list，下面 asarray 兜底
     top_k: int,
     embedding_model: str,
 ) -> list[str]:
-    """Retrieve the top_k most relevant chunks for the query"""
-    query_embedding = (await _get_embeddings([query], model=embedding_model))[0]
+    """Retrieve the top_k most relevant chunks for the query (vectorized cosine)"""
+    import numpy as np
 
-    scored = []
-    for i, emb in enumerate(embeddings):
-        score = _cosine_similarity(query_embedding, emb)
-        scored.append((score, i))
+    query_emb = np.asarray(
+        (await _get_embeddings([query], model=embedding_model))[0], dtype=np.float32
+    )
+    emb_np = np.asarray(embeddings, dtype=np.float32)
 
-    scored.sort(reverse=True)
-    return [chunks[idx] for _, idx in scored[:top_k]]
+    q_norm = float(np.linalg.norm(query_emb))
+    if q_norm == 0 or emb_np.size == 0:
+        return [chunks[i] for i in range(min(top_k, len(chunks)))]
+
+    e_norms = np.linalg.norm(emb_np, axis=1)
+    e_norms = np.where(e_norms == 0, 1.0, e_norms)
+    scores = (emb_np @ query_emb) / (e_norms * q_norm)
+    top_idx = np.argsort(scores)[::-1][:top_k]
+    return [chunks[i] for i in top_idx if i < len(chunks)]
 
 
 # ============================================================
@@ -603,9 +629,6 @@ async def _batch_openie(
     return results
 
 
-# Graph cache: {cache_key: (graph, entity_names, entity_embeddings, chunk_idx_to_node)}
-_GRAPH_CACHE: dict = {}
-
 # Graph build concurrency limit: max 2 users building simultaneously (entity embedding is memory bottleneck)
 _GRAPH_BUILD_SEMAPHORE: asyncio.Semaphore | None = None
 
@@ -619,9 +642,10 @@ def _get_graph_build_semaphore() -> asyncio.Semaphore:
 
 async def _build_or_get_graph(
     chunks: list[str],
-    embeddings: list[list[float]],
+    embeddings,  # 未使用，签名保留兼容；调用方传 np.ndarray 或 list 都可
     openie_results: list[dict],
     user_dir: Path,
+    data_group: str,
     embedding_model: str,
     max_chunk_chars: int,
 ) -> tuple:
@@ -634,44 +658,43 @@ async def _build_or_get_graph(
 
     import numpy as np
 
-    cache_key = f"graph:{user_dir}:{max_chunk_chars}:{embedding_model}"
-    if cache_key in _GRAPH_CACHE:
-        logger.debug("[HippoRAG] Graph memory cache hit for %s", user_dir.name)
-        return _GRAPH_CACHE[cache_key]
+    lock_key = f"{user_dir}:{max_chunk_chars}:{embedding_model}"
+    lock = _GRAPH_LOCKS.get(lock_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _GRAPH_LOCKS[lock_key] = lock
 
-    # --- Disk cache check (.index_done exists means both index + graph are complete) ---
-    work_dir = user_dir.parent.parent / ".hippo_work_dirs" / user_dir.name
-    index_done = work_dir / ".index_done"
-    entity_file = work_dir / "entity_list.json"
-    ent_emb_file = work_dir / "entity_embeddings.npz"
-    graph_file = work_dir / "graph.pkl"
+    async with lock:
+        # --- Disk cache check (.index_done exists means both index + graph are complete) ---
+        work_dir = _BENCHMARK_DATA_DIR / data_group / ".hippo_work_dirs" / user_dir.name
+        index_done = work_dir / ".index_done"
+        entity_file = work_dir / "entity_list.json"
+        ent_emb_file = work_dir / "entity_embeddings.npz"
+        graph_file = work_dir / "graph.pkl"
 
-    if index_done.exists() and entity_file.exists() and ent_emb_file.exists() and graph_file.exists():
-        logger.info("[HippoRAG] Graph disk cache hit for %s", user_dir.name)
-        with open(entity_file, encoding="utf-8") as f:
-            edata = json.load(f)
-        ent_emb_np = np.load(ent_emb_file)["embeddings"]
-        with open(graph_file, "rb") as f:
-            G = pickle.load(f)
-        chunk_idx_to_node = {int(k): v for k, v in edata["chunk_idx_to_node"].items()}
-        result = (G, edata["entity_list"], ent_emb_np, chunk_idx_to_node)
-        _GRAPH_CACHE[cache_key] = result
-        return result
+        if index_done.exists() and entity_file.exists() and ent_emb_file.exists() and graph_file.exists():
+            logger.info("[HippoRAG] Graph disk cache hit for %s", user_dir.name)
+            with open(entity_file, encoding="utf-8") as f:
+                edata = json.load(f)
+            ent_emb_np = np.load(ent_emb_file)["embeddings"]
+            with open(graph_file, "rb") as f:
+                G = pickle.load(f)
+            chunk_idx_to_node = {int(k): v for k, v in edata["chunk_idx_to_node"].items()}
+            return (G, edata["entity_list"], ent_emb_np, chunk_idx_to_node)
 
-    # --- Serialized graph build (limit concurrent graph builds to prevent entity embedding memory spikes) ---
-    async with _get_graph_build_semaphore():
-        return await _do_build_graph(
-            chunks=chunks,
-            openie_results=openie_results,
-            user_dir=user_dir,
-            embedding_model=embedding_model,
-            work_dir=work_dir,
-            index_done=index_done,
-            entity_file=entity_file,
-            ent_emb_file=ent_emb_file,
-            graph_file=graph_file,
-            cache_key=cache_key,
-        )
+        # --- Serialized graph build (limit concurrent graph builds to prevent entity embedding memory spikes) ---
+        async with _get_graph_build_semaphore():
+            return await _do_build_graph(
+                chunks=chunks,
+                openie_results=openie_results,
+                user_dir=user_dir,
+                embedding_model=embedding_model,
+                work_dir=work_dir,
+                index_done=index_done,
+                entity_file=entity_file,
+                ent_emb_file=ent_emb_file,
+                graph_file=graph_file,
+            )
 
 
 async def _do_build_graph(
@@ -684,7 +707,6 @@ async def _do_build_graph(
     entity_file: Path,
     ent_emb_file: Path,
     graph_file: Path,
-    cache_key: str,
 ) -> tuple:
     """Actual graph build (executed under semaphore protection)"""
     import pickle
@@ -707,9 +729,7 @@ async def _do_build_graph(
 
     if not entity_list:
         logger.warning("[HippoRAG] No entities extracted, will fall back to dense retrieval")
-        empty = (G, [], np.array([]), {})
-        _GRAPH_CACHE[cache_key] = empty
-        return empty
+        return (G, [], np.array([]), {})
 
     # Entity nodes
     for ent in entity_list:
@@ -745,20 +765,40 @@ async def _do_build_graph(
     # Entity embeddings + synonymy edges
     logger.info("[HippoRAG] Encoding %d entities for synonymy edges", len(entity_list))
     ent_embeddings = await _get_embeddings(entity_list, model=embedding_model)
-    ent_emb_np = np.array(ent_embeddings)
+    ent_emb_np = np.array(ent_embeddings, dtype=np.float32)
 
     norms = np.linalg.norm(ent_emb_np, axis=1, keepdims=True)
     norms = np.where(norms == 0, 1.0, norms)
     ent_emb_normed = ent_emb_np / norms
+    del ent_emb_np  # 释放未归一化副本
 
-    sim_matrix = ent_emb_normed @ ent_emb_normed.T
+    # 分块计算 synonymy edges，避免分配完整 NxN sim_matrix（N=9000 时 648MB）
     SYN_THRESHOLD = 0.85
-    for i in range(len(entity_list)):
-        for j in range(i + 1, len(entity_list)):
-            if sim_matrix[i, j] >= SYN_THRESHOLD:
+    BLOCK_SIZE = 512
+    n = len(entity_list)
+    syn_count = 0
+    for i_start in range(0, n, BLOCK_SIZE):
+        i_end = min(i_start + BLOCK_SIZE, n)
+        # 只计算上三角：j >= i_start，所以 block @ full.T 然后只取 j > i 的部分
+        sim_block = ent_emb_normed[i_start:i_end] @ ent_emb_normed[i_start:].T  # (block, n-i_start) float32
+        for bi in range(i_end - i_start):
+            i = i_start + bi
+            # sim_block[bi] 对应 entity_list[i] vs entity_list[i_start:]
+            # 只看 j > i 的部分
+            j_offset = i - i_start + 1  # 跳过 j <= i
+            row = sim_block[bi, j_offset:]
+            hits = np.where(row >= SYN_THRESHOLD)[0]
+            for h in hits:
+                j = i + 1 + h
                 ni, nj = f"ent:{entity_list[i]}", f"ent:{entity_list[j]}"
                 if not G.has_edge(ni, nj):
-                    G.add_edge(ni, nj, weight=float(sim_matrix[i, j]), type="synonymy")
+                    G.add_edge(ni, nj, weight=float(row[h]), type="synonymy")
+                    syn_count += 1
+        del sim_block
+    del ent_emb_normed  # graph 构建完毕，释放
+    # 重新加载 ent_emb_np 用于后续检索（从 embeddings 列表，不重新归一化）
+    ent_emb_np = np.array(ent_embeddings, dtype=np.float32)
+    logger.info("[HippoRAG] Found %d synonymy edges (threshold=%.2f)", syn_count, SYN_THRESHOLD)
 
     logger.info(
         "[HippoRAG] Graph built: %d nodes (%d entities, %d passages), %d edges",
@@ -778,15 +818,13 @@ async def _do_build_graph(
     index_done.touch()
     logger.info("[HippoRAG] Graph saved to disk: %s", work_dir)
 
-    result = (G, entity_list, ent_emb_np, chunk_idx_to_node)
-    _GRAPH_CACHE[cache_key] = result
-    return result
+    return (G, entity_list, ent_emb_np, chunk_idx_to_node)
 
 
 async def _retrieve_with_ppr(
     query: str,
     chunks: list[str],
-    chunk_embeddings: list[list[float]],
+    chunk_embeddings,  # np.ndarray (N, D) float32（向后兼容 list 输入）
     graph,  # nx.Graph
     entity_list: list[str],
     entity_embeddings,  # np.ndarray
@@ -830,7 +868,7 @@ async def _retrieve_with_ppr(
                 personalization[node_name] = score
 
     # Add passage dense retrieval scores (weak weight)
-    chunk_emb_np = np.array(chunk_embeddings)
+    chunk_emb_np = np.asarray(chunk_embeddings, dtype=np.float32)
     norms_c = np.linalg.norm(chunk_emb_np, axis=1, keepdims=True)
     norms_c = np.where(norms_c == 0, 1.0, norms_c)
     passage_scores = (chunk_emb_np / norms_c) @ (query_emb / norms_q)
@@ -976,9 +1014,19 @@ class HippoRagApiTargetAgent(AbstractTargetAgent, name="hippo_rag_api", params_m
         self._user_dir: Path | None = None
         if target_config.user_email:
             dir_name = _email_to_dir(target_config.user_email)
-            self._user_dir = _BENCHMARK_DATA_DIR / target_config.data_group / ".data" / dir_name
+            self._user_dir = paths.user_data_dir(target_config.data_group) / dir_name
+            logger.info(
+                "[HippoRAG] user_dir=%s exists=%s data_group=%s",
+                self._user_dir,
+                self._user_dir.is_dir(),
+                target_config.data_group,
+            )
             if not self._user_dir.is_dir():
-                logger.warning("[HippoRAG] User data directory not found: %s", self._user_dir)
+                logger.warning(
+                    "[HippoRAG] error_code=USER_DIR_NOT_FOUND user_dir=%s data_group=%s",
+                    self._user_dir,
+                    target_config.data_group,
+                )
 
         # Cost tracking
         self._cost = UsageMetadata(input_tokens=0, output_tokens=0, total_tokens=0)
@@ -1010,6 +1058,7 @@ class HippoRagApiTargetAgent(AbstractTargetAgent, name="hippo_rag_api", params_m
         # 1. Build/get vector index
         chunks, embeddings, openie_indices = await _build_or_get_index(
             self._user_dir,
+            data_group=self.config.data_group,
             max_chunk_chars=self.config.max_chunk_chars,
             embedding_model=self.config.embedding_model,
         )
@@ -1031,6 +1080,7 @@ class HippoRagApiTargetAgent(AbstractTargetAgent, name="hippo_rag_api", params_m
                 embeddings=embeddings,
                 openie_results=openie_results,
                 user_dir=self._user_dir,
+                data_group=self.config.data_group,
                 embedding_model=self.config.embedding_model,
                 max_chunk_chars=self.config.max_chunk_chars,
             )

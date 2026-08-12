@@ -100,7 +100,7 @@ def _parse_filename_tokens(report_path: Path) -> list[str]:
 def _parse_original_target_type(report_path: Path) -> str | None:
     """Recover original target_type from a report filename. Reeval reports save
     target_type='eval_only' on cases, but the filename still encodes the original
-    target_label (e.g., full-20260520_llm_api_gpt-5.4_reeval_<ts>.json → 'llm_api')."""
+    target_label (e.g., full-20260430_llm_api_gpt-5.4_reeval_<ts>.json → 'llm_api')."""
     parts = _parse_filename_tokens(report_path)
     if len(parts) < 2:
         return None
@@ -117,7 +117,7 @@ def _resolve_dataset(report_path: Path) -> Path:
     Naming: {dataset}_{target_label}_{YYYYMMDD_HHMMSS}.json under benchmark/report/{benchmark}/
     """
     parts = _parse_filename_tokens(report_path)
-    # Conservative: take the first token as dataset (works for "full-20260520_..." / "sample_...")
+    # Conservative: take the first token as dataset (works for "full-20260430_..." / "sample_...")
     dataset = parts[0] if parts else report_path.stem
     benchmark = report_path.parent.name
     candidate = report_path.parents[2] / "data" / benchmark / f"{dataset}.jsonl"

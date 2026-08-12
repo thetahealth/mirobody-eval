@@ -1,0 +1,19 @@
+# eslbench_distractor — only the released datasets + benchmark scripts are tracked.
+# Everything else here (scratch/intermediate datasets, one-off analysis & launcher
+# scripts, any locally-written eval output) is generated and stays untracked.
+
+# datasets: ignore all jsonl, then re-include the released ones + the representative sample
+*.jsonl
+*.jsonl.*
+!sample.jsonl
+!distractor-behavioral-*.jsonl
+!distractor-computable-*.jsonl
+
+# one-off analysis / launcher scripts (not part of the benchmark harness)
+inspect_inversion.py
+difficulty_slice.py
+rejudge_*.py
+run_v11_dashscope.py
+
+# local eval output, if ever written under data/ (canonical home is benchmark/report/)
+report/

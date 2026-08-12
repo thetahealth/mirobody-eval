@@ -16,6 +16,8 @@ Infrastructure params (read from env vars, managed by do_execute / init_chat_mod
 """
 
 import logging
+import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
@@ -38,6 +40,20 @@ _DEFAULT_SYSTEM_PROMPT = "You are an AI assistant. Please provide helpful answer
 
 # benchmark/data/ directory (3 levels up from evaluator/plugin/target_agent/ -> project root -> benchmark/data/)
 _BENCHMARK_DATA_DIR = Path(__file__).resolve().parents[3] / "benchmark" / "data"
+
+# ESLBench-only language awareness (V2-1).
+# ESLBench 题面可能为中英文；基模默认用英文回答会被 kg_qa 判负。检测题面语言并在
+# system_prompt 尾部追加语言指令，让基模用与提问一致的语言作答。仅对 eslbench/retrieve
+# 作用域生效（见 LlmApiTargetAgent._generate_next_reaction 的 scope gate），其它 llm_api
+# benchmark（healthbench / aq_redteam ...）行为字节级不变。
+# CJK Ext-A (㐀-䶿) + Unified (一-鿿) + Compat Ideographs (豈-﫿)
+_CJK_RE = re.compile(r"[㐀-鿿豈-﫿]")
+_LANG_DIRECTIVE = {"zh": "\n\nReply in Chinese (请用中文回答).", "en": ""}
+
+
+def _detect_lang(text: str) -> str:
+    """检测题面语言：命中 CJK 字符即判 zh，否则 en。None/空串 视为 en。"""
+    return "zh" if _CJK_RE.search(text or "") else "en"
 
 
 def _load_tool_group(tool_group: str, tool_context: dict[str, Any]) -> tuple[list[BaseTool], type | None]:
@@ -111,10 +127,29 @@ class LlmApiTargetInfo(BaseModel):
         "gemini-3.1-flash-lite-preview",
         "gemini-3-pro-preview",
         "gemini-3-flash-preview",
+        "gemini-3.5-flash",
         "anthropic/claude-opus-4.6",
         "anthropic/claude-sonnet-4.6",
         "minimax/minimax-m2.7",
         "z-ai/glm-5.1",
+        "z-ai/glm-5.2",
+        "moonshotai/kimi-k3",
+        "kimi-k3",
+        "gpt-5.5",
+        "google/gemini-3-flash-preview",
+        "google/gemini-3.5-flash",
+        "google/gemini-3.1-pro-preview",
+        "moonshotai/kimi-k2.6",
+        "deepseek/deepseek-v4-pro",
+        "minimax/minimax-m3",
+        "qwen/qwen3.7-max",
+        # nova 中转 per-call("[次]"计费档);以 "[" 开头 → 走 llm.py 的 OpenAI 兼容 base_url 分支
+        "[次]gemini-3-flash-preview",
+        "[次]gemini-3.1-pro-preview",
+        "[次]gemini-3.1-pro-preview-thinking",
+        "[次]claude-sonnet-4-6",
+        "[次]gemini-3.5-flash",
+        "glm-5.2",
     ] = Field(description="Model name")
     system_prompt: Optional[str] = Field(None, description="System prompt (uses default prompt if not specified)")
     tool_group: Optional[str] = Field(
@@ -150,6 +185,9 @@ class LlmApiTargetAgent(AbstractTargetAgent, name="llm_api", params_model=LlmApi
         super().__init__(target_config, history=history)
         self.config: LlmApiTargetInfo = target_config
         self.model: str = target_config.model
+
+        # ESLBench-only latched per-session language (V2-1). None = not yet detected.
+        self._lang: str | None = None
 
         # Convert history (List[BaseMessage]) to BasicMessage list for do_execute
         self._conversation: list[BasicMessage] = []
@@ -213,6 +251,17 @@ class LlmApiTargetAgent(AbstractTargetAgent, name="llm_api", params_model=LlmApi
         user_text = self._extract_user_input(test_action)
         system_prompt = self.config.system_prompt or _DEFAULT_SYSTEM_PROMPT
 
+        # V2-1 SCOPE GATE: language awareness only for the eslbench retrieve tool group.
+        # Any other llm_api benchmark (healthbench / aq_redteam / ...) is byte-for-byte unchanged.
+        if getattr(self.config, "tool_group", None) == "eslbench/retrieve":
+            override = os.environ.get("HOLYEVAL_ESLBENCH_TARGET_LANG", "auto").lower()
+            lang = override if override in ("en", "zh") else (self._lang or _detect_lang(user_text))
+            if self._lang is None and override not in ("en", "zh"):
+                self._lang = lang  # latch on first turn (auto-detect path only)
+            # en appends "" => zero change for English tasks; augment the local var only,
+            # leaving self.config.system_prompt untouched (get_session_info must see the base value).
+            system_prompt = system_prompt + _LANG_DIRECTIVE.get(lang, "")
+
         logger.debug(
             "[LlmApiTargetAgent] Calling %s, history=%d messages",
             self.config.model,
@@ -220,6 +269,11 @@ class LlmApiTargetAgent(AbstractTargetAgent, name="llm_api", params_model=LlmApi
         )
 
         # Call do_execute: history_messages is prior conversation, input is current user input
+        # opt-in 确定性:HOLYEVAL_TARGET_TEMP 设值时钉被测模型 temperature(默认不设=不变)
+        import os as _os
+        _temp_env = _os.environ.get("HOLYEVAL_TARGET_TEMP")
+        _temperature = float(_temp_env) if _temp_env not in (None, "") else None
+
         result = await do_execute(
             model=self.config.model,
             system_prompt=system_prompt,
@@ -229,6 +283,7 @@ class LlmApiTargetAgent(AbstractTargetAgent, name="llm_api", params_model=LlmApi
             thinking_level=self.config.thinking_level,
             tool_context=self._tool_context_typed or self.config.tool_context,
             tool_context_schema=self._tool_context_schema,
+            temperature=_temperature,
         )
 
         assistant_content = result.content
