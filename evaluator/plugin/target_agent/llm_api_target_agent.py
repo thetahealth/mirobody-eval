@@ -118,32 +118,12 @@ class LlmApiTargetInfo(BaseModel):
         },
     )
     type: Literal["llm_api"] = Field(description="Target type")
-    model: Literal[
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5.2",
-        "gpt-4.1",
-        "gemini-3.1-pro-preview",
-        "gemini-3.1-flash-lite-preview",
-        "gemini-3-pro-preview",
-        "gemini-3-flash-preview",
-        "gemini-3.5-flash",
-        "anthropic/claude-opus-4.6",
-        "anthropic/claude-sonnet-4.6",
-        "minimax/minimax-m2.7",
-        "z-ai/glm-5.1",
-        "z-ai/glm-5.2",
-        "moonshotai/kimi-k3",
-        "kimi-k3",
-        "gpt-5.5",
-        "google/gemini-3-flash-preview",
-        "google/gemini-3.5-flash",
-        "google/gemini-3.1-pro-preview",
-        "moonshotai/kimi-k2.6",
-        "deepseek/deepseek-v4-pro",
-        "minimax/minimax-m3",
-        "qwen/qwen3.7-max",
-    ] = Field(description="Model name")
+    model: str = Field(
+        min_length=1,
+        pattern=r"\S",
+        description="Provider model ID, e.g. gpt-5.4-mini, openai/gpt-5-mini, or dashscope:qwen3.5-flash",
+        examples=["gpt-5.4-mini", "openai/gpt-5-mini", "dashscope:qwen3.5-flash"],
+    )
     system_prompt: Optional[str] = Field(None, description="System prompt (uses default prompt if not specified)")
     tool_group: Optional[str] = Field(
         None,
