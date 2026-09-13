@@ -34,6 +34,82 @@ _RETRYABLE_MAX_ATTEMPTS = 3
 _RETRYABLE_BASE_DELAY = 1.0  # 秒，指数退避基数
 
 
+# provider → (api key 环境变量, base_url 覆盖变量, 默认 base_url)
+#
+# 与被测引擎 mirobody 同一张表（`mirobody/utils/config/llm.py` 的 `_OPENAI_COMPAT`），
+# 刻意保持一致:同一个人拿同一个 key，在引擎侧和评测侧不该需要两套写法。
+#
+# 用法是模型名加 `provider:` 前缀 —— `dashscope:qwen3.5-flash`。不加前缀时行为
+# 完全不变（见下面 do_execute 里的前缀规则），所以既有的报告和脚本不受影响。
+#
+# 为什么用冒号而不是 `provider/model`:OpenRouter 的模型 id 本身就是 `vendor/model`
+# 形状（`openai/gpt-5-mini`、`anthropic/claude-sonnet-5`），拿斜杠当分隔符会把这些
+# 名字抢走、路由到错误的端点。
+_OPENAI_COMPAT: dict[str, tuple[str, str, str]] = {
+    "openrouter": ("OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+    "dashscope": (
+        "DASHSCOPE_API_KEY",
+        "DASHSCOPE_BASE_URL",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    ),
+    "deepseek": ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
+    "volcengine": (
+        "VOLCENGINE_API_KEY",
+        "VOLCENGINE_BASE_URL",
+        "https://ark.cn-beijing.volces.com/api/v3",
+    ),
+    "zhipu": ("ZHIPU_API_KEY", "ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
+    "moonshot": ("MOONSHOT_API_KEY", "MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1"),
+}
+
+#: 已经为哪些模型打过「改从 OpenRouter 走」的提示。进程级去重:这条提示是给人看
+#: 「你的请求没去你以为的地方」，说一次就够,每次调用都说会把日志刷爆。
+_REROUTE_NOTIFIED: set[str] = set()
+
+#: 走各自原生 SDK、不套 OpenAI 兼容层的两个。写成 `openai:` / `google:` 是为了
+#: 能显式压过前缀规则 —— 比如 `openai:gpt-oss-120b` 才是真的要打 OpenAI，而裸的
+#: `gpt-oss-120b` 按前缀规则也会被判成 OpenAI，却往往并不是本意。
+_NATIVE_PREFIXES = {"openai", "google"}
+
+
+def _split_provider_prefix(model: str) -> str:
+    """取出 `provider:` 前缀里的 provider 名，没有则返回空串。
+
+    只认冒号出现在第一个斜杠**之前**的情况:OpenRouter 用后缀冒号表达变体
+    （`anthropic/claude-sonnet-4.5:batch`），那种冒号不是 provider 分隔符。
+
+    前缀不认识时直接报错，不静默退回 OpenRouter —— 打错一个 provider 名而被
+    默默发去另一个端点，症状会是一个和拼写毫无关系的鉴权失败。
+    """
+    if model.startswith("["):  # 自建网关语法，整体保持原样
+        return ""
+    colon = model.find(":")
+    if colon <= 0:
+        return ""
+    slash = model.find("/")
+    if slash != -1 and slash < colon:
+        return ""
+    head = model[:colon]
+    if head in _OPENAI_COMPAT or head in _NATIVE_PREFIXES:
+        return head
+    known = ", ".join(sorted(_OPENAI_COMPAT) + sorted(_NATIVE_PREFIXES))
+    raise ValueError(f"模型名 {model!r} 的 provider 前缀 {head!r} 不认识。可用: {known}")
+
+
+def _relax_vertex_env() -> None:
+    """让 Gemini 走 AI Studio 直连，而不是需要 ADC 凭证的 Vertex。
+
+    Remote config 在生产容器里会推 `GOOGLE_GENAI_USE_VERTEXAI=true`，而本地评测
+    通常只有 `GOOGLE_API_KEY`、没有 gcloud ADC，那条路径会被 Vertex 端点拒掉。
+    显式设了 `GOOGLE_APPLICATION_CREDENTIALS` 时不动 —— 那是用户主动选择 Vertex。
+    """
+    import os as _os
+
+    if _os.environ.get("GOOGLE_API_KEY") and not _os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+        for _k in ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"):
+            _os.environ.pop(_k, None)
+
+
 class BasicMessage(BaseModel):
     """基础消息（支持多模态）"""
 
@@ -137,11 +213,35 @@ async def do_execute(
 
     # ---- 1. 判断 provider，拼装模型参数 ----
 
+    # `provider:model` 显式指定（如 `dashscope:qwen3.5-flash`）。见 _OPENAI_COMPAT
+    # 的说明；命中时直接拿到端点和 key 变量，不再靠模型名前缀猜。
+    compat: tuple[str, str, str] | None = None
+    forced_native = ""
+    head = _split_provider_prefix(model)
+    if head:
+        forced_native_map = {"openai": "openai", "google": "google_genai"}
+        model = model[len(head) + 1 :]
+        if head in _OPENAI_COMPAT:
+            compat = _OPENAI_COMPAT[head]
+        else:
+            forced_native = forced_native_map[head]
+
     # 方括号前缀的模型名走「自带的 OpenAI 兼容网关」(vLLM / LiteLLM / 自建中转均可):
     # base_url/key 取自 HOLYEVAL_GATEWAY_BASE_URL / HOLYEVAL_GATEWAY_API_KEY(见下 init_kwargs)。
     # 用独立变量而不是复用 GEMINI_API_KEY —— 后者是真正的 Google key,复用会把它发给任意第三方。
     use_gateway = False
-    if model.startswith("["):
+    if compat is not None:
+        # 显式 provider —— OpenAI 兼容协议，端点来自 _OPENAI_COMPAT
+        provider = "openai"
+        use_openrouter = False
+    elif forced_native == "google_genai":
+        provider = "google_genai"
+        use_openrouter = False
+        _relax_vertex_env()
+    elif forced_native == "openai":
+        provider = "openai"
+        use_openrouter = False
+    elif model.startswith("["):
         provider = "openai"
         use_openrouter = False
         use_gateway = True
@@ -153,17 +253,42 @@ async def do_execute(
         # Google Gemini 模型
         provider = "google_genai"
         use_openrouter = False
-        # Remote config 可能强制 GOOGLE_GENAI_USE_VERTEXAI=true（生产 Vertex 路径）。
-        # 本地评测没有 gcloud ADC 凭证时会失败，回退到 GOOGLE_API_KEY 直连 Generative Language API。
-        # 显式 export GOOGLE_GENAI_USE_VERTEXAI=true 时不覆盖（让用户保留主动选择）。
-        import os as _os
-        if _os.environ.get("GOOGLE_API_KEY") and not _os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
-            for _k in ("GOOGLE_GENAI_USE_VERTEXAI", "GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION"):
-                _os.environ.pop(_k, None)
+        _relax_vertex_env()
     else:
         # 其他模型通过 OpenRouter 调用（如 anthropic/claude-3.7-sonnet）
         provider = "openai"
         use_openrouter = True
+
+    # 按可用的 key 兜住那些「默认模型假设你有某个 key」的情况。
+    #
+    # 七个判分器各自的默认模型全是 OpenAI 家族（gpt-4.1 / gpt-5.2 / gpt-5.4-mini），
+    # 所以只配了 OPENROUTER_API_KEY 的用户跑任何默认配置都会拿到一个 `OpenAIError`
+    # —— 一个完全指不到真实原因的报错（key 是对的，只是模型名的写法决定了它被发去
+    # 哪个端点）。这里把同一个模型改从 OpenRouter 走:`openai/<name>` 在 OpenRouter
+    # 上就是同一个模型，命名是稳定约定。
+    #
+    # 只对前缀规则判出来的 OpenAI 生效。显式写 `openai:` 的不动 —— 那是用户主动
+    # 要求打官方端点，替他改道就成了违背指令。
+    #
+    # Gemini 刻意不做同样的事:OpenRouter 上的 Gemini 命名不是 1:1（本仓库文档里
+    # 点名的 `gemini-3-pro-preview` 在那边就不存在），自动改道会变成 404。
+    if provider == "openai" and not use_openrouter and not use_gateway and not forced_native and compat is None:
+        import os
+
+        if not os.environ.get("OPENAI_API_KEY") and os.environ.get("OPENROUTER_API_KEY"):
+            rerouted = f"openai/{model}"
+            # 每个模型只提示一次。判分器对每条 rubric 都调一次模型 —— 实测 2 条用例
+            # 就刷了 29 行一模一样的 WARNING，跑全量会是上千行,把真正该看的日志淹掉。
+            if model not in _REROUTE_NOTIFIED:
+                _REROUTE_NOTIFIED.add(model)
+                logger.warning(
+                    "模型 %r 需要 OPENAI_API_KEY(未配置)，改从 OpenRouter 取同一模型: %r。"
+                    "想固定这个行为就直接写后者;想打 OpenAI 官方请配 OPENAI_API_KEY。",
+                    model,
+                    rerouted,
+                )
+            model = rerouted
+            use_openrouter = True
 
     model_kwargs: dict[str, Any] = {}
     if max_tokens is not None:
@@ -204,8 +329,24 @@ async def do_execute(
         init_kwargs["temperature"] = temperature
 
     # OpenAI + reasoning_effort + tools → 必须使用 Responses API
-    if provider == "openai" and not use_openrouter and thinking_level is not None and tools:
+    if provider == "openai" and not use_openrouter and compat is None and thinking_level is not None and tools:
         init_kwargs["use_responses_api"] = True
+
+    # 显式 provider（`dashscope:` 等）—— 端点和 key 都来自 _OPENAI_COMPAT
+    if compat is not None:
+        import os
+
+        key_env, base_env, default_base = compat
+        api_key = os.getenv(key_env)
+        if not api_key:
+            raise RuntimeError(
+                f"模型 {head + ':' + model!r} 要用 {key_env}，但该环境变量没有设置。"
+                f"在 .env 里配上它，或换一个已配好 key 的 provider 前缀。"
+            )
+        init_kwargs["base_url"] = os.getenv(base_env) or default_base
+        init_kwargs["api_key"] = api_key
+        # `init_kwargs["model"]` 不用再设:前缀在上面第 1 步就从 `model` 剥掉了，
+        # 构建 init_kwargs 时取到的已经是真实模型 id。
 
     # OpenRouter 配置（非 gpt/gemini 模型）
     if use_openrouter:
@@ -227,7 +368,21 @@ async def do_execute(
         init_kwargs["base_url"] = base
         init_kwargs["api_key"] = os.getenv("HOLYEVAL_GATEWAY_API_KEY", "")
 
-    llm = init_chat_model(**init_kwargs)
+    # Let the Google SDK resolve API keys and Vertex ADC (including gcloud and
+    # workload credentials); environment-variable checks cannot enumerate them.
+    from google.auth.exceptions import DefaultCredentialsError
+
+    try:
+        llm = init_chat_model(**init_kwargs)
+    except (ValueError, DefaultCredentialsError) as exc:
+        if provider != "google_genai":
+            raise
+        raise RuntimeError(
+            f"Google model {model!r} could not be initialized: {exc}. "
+            "Use GOOGLE_API_KEY or GEMINI_API_KEY for Gemini, or configure Vertex AI "
+            "with Application Default Credentials. To use OpenRouter instead, select "
+            "its published model ID explicitly (for example google/gemini-2.5-pro)."
+        ) from exc
 
     # ---- 3. 创建 agent ----
     #   有 tools → agent 会进入 ReAct 循环（LLM → tool → LLM → ...）
