@@ -548,11 +548,22 @@ class TestCost(BaseModel):
 class EvalResult(BaseModel):
     """评估结果
 
-    result 四态:
+    result 四态，按「有没有判成分」划分:
+
+    判成了 ——
     - "pass"   — 得分 >= threshold，通过
     - "fail"   — 得分 < threshold，未通过
     - "scored" — 仅评分，不判定通过/失败（threshold 未设置时使用）
-    - "error"  — 基础设施故障（如 API 502），不计入 pass/fail 统计
+
+    没判成 ——
+    - "error"  — 判分没发生:基础设施故障（API 502、超时、连接失败）、判分器
+                 不可用（`JudgeUnavailable`）、用例被取消，以及本框架自身抛出
+                 的任何异常。不计入 pass/fail，也不计入 avg_score。
+
+    这条界线是硬的:`score` 字段在 error 下恒为 0.0，但那个 0 不是成绩，读它
+    的代码必须先看 result。把没判成的算作 fail 0.00 会让「没跑完」和「答错了」
+    无法区分 —— 而同一道题在预算不足时 0.00、预算够时 0.89，一个随评测方配置
+    变化的数不能当成被测系统的属性。
     """
 
     result: Literal["pass", "fail", "scored", "error"] = Field(description="测试结果（pass/fail/scored/error）")
@@ -599,6 +610,15 @@ class TestReport(BaseModel):
         return sum(1 for c in self.cases if c.eval.result == "fail")
 
     @property
+    def error_count(self) -> int:
+        """没判成分的用例数 — 超时/连接失败/判分器不可用/被取消
+
+        读 `avg_score` 必须同时读这个:它们被排除在平均分之外，所以一个大面积
+        失败的跑批会显示成漂亮的高分。
+        """
+        return sum(1 for c in self.cases if c.eval.result == "error")
+
+    @property
     def pass_rate(self) -> float:
         """通过率 — 仅在有 pass/fail 判定的用例中计算，全部为 scored 时返回 0.0"""
         judged = self.pass_count + self.fail_count
@@ -606,8 +626,12 @@ class TestReport(BaseModel):
 
     @property
     def avg_score(self) -> float:
-        """平均得分，无用例时返回 0.0"""
-        return sum(c.eval.score for c in self.cases) / len(self.cases) if self.cases else 0.0
+        """平均得分 — 分母只含判成了分的用例（不含 error），无此类用例时返回 0.0
+
+        error 的 score 恒为 0.0，但那个 0 不是成绩。见 EvalResult 的四态说明。
+        """
+        scored = [c for c in self.cases if c.eval.result != "error"]
+        return sum(c.eval.score for c in scored) / len(scored) if scored else 0.0
 
     @property
     def total_duration_seconds(self) -> float:

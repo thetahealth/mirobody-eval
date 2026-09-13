@@ -1709,6 +1709,20 @@ def _ensure_hydrated_duckdb(ctx: ToolContext) -> Path:
     import shutil
     import tempfile
 
+    # 数据没下载时早报错、并说清怎么办。
+    #
+    # 下面的 `mkstemp(dir=ctx.data_dir)` 在目录不存在时抛的是
+    # `FileNotFoundError: .../user5026_AT_demo/.holyeval_tmp_xxxx.duckdb` ——
+    # 一个关于临时文件的报错，指不到真实原因（这个用户的数据面还没拉下来）。
+    # ESLBench 的数据不随仓库走，而 README 的命令清单里 eslbench 那条排在数据
+    # 准备说明之前,所以这是新用户几乎一定会先撞上的一处。
+    if not ctx.data_dir.is_dir():
+        raise FileNotFoundError(
+            f"用户数据目录不存在: {ctx.data_dir}\n"
+            f"ESLBench 的数据不随仓库分发，先拉一次:\n"
+            f"    python -m generator.eslbench.prepare_data"
+        )
+
     cache_path = _cache_db_path(ctx)
     source_paths = [
         ctx.db_path,

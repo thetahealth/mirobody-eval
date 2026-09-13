@@ -43,6 +43,9 @@
         <div class="rounded-lg border border-border bg-card p-4">
             <div class="text-xs text-muted-foreground mb-1">Avg Score</div>
             <div class="text-2xl font-semibold" x-text="stats.avgScore"></div>
+            <!-- The denominator, whenever it is not every finished case. -->
+            <div x-show="stats.error > 0" class="text-xs text-warning-foreground mt-1"
+                 x-text="`over ${stats.gradedCount} graded · ${stats.error} error`"></div>
         </div>
         <div class="rounded-lg border border-border bg-card p-4">
             <div class="text-xs text-muted-foreground mb-1">Duration</div>
@@ -61,8 +64,12 @@
             <div class="h-full bg-success transition-all" :style="`width: ${task.total > 0 ? (stats.pass / task.total * 100) : 0}%`"></div>
             <div class="h-full bg-destructive transition-all" :style="`width: ${task.total > 0 ? (stats.fail / task.total * 100) : 0}%`"></div>
             <div class="h-full bg-blue-400 transition-all" :style="`width: ${task.total > 0 ? (stats.scored / task.total * 100) : 0}%`"></div>
+            <div class="h-full bg-warning transition-all" :style="`width: ${task.total > 0 ? (stats.error / task.total * 100) : 0}%`"></div>
+            <!-- In-flight = finished minus every terminal bucket. `stats.error` has to
+                 be in this subtraction: it is a finished case, and leaving it out made
+                 the pulsing segment count timed-out cases as still running. -->
             <div x-show="task.status === 'running'" class="h-full bg-blue-500/50 animate-pulse transition-all"
-                 :style="`width: ${task.total > 0 ? ((task.completed - stats.pass - stats.fail - stats.scored) / task.total * 100) : 0}%`"></div>
+                 :style="`width: ${task.total > 0 ? ((task.completed - stats.pass - stats.fail - stats.scored - stats.error) / task.total * 100) : 0}%`"></div>
         </div>
     </div>
 
@@ -147,7 +154,7 @@
                 </button>
                 <div x-show="open" x-transition.opacity.duration.100ms
                      class="absolute z-50 mt-1 left-0 min-w-[80px] rounded-md border border-border bg-popover py-1 shadow-md">
-                    <template x-for="f in [{key:'all',label:'All'},{key:'pass',label:'Pass'},{key:'fail',label:'Fail'},{key:'scored',label:'Scored'}]" :key="f.key">
+                    <template x-for="f in [{key:'all',label:'All'},{key:'pass',label:'Pass'},{key:'fail',label:'Fail'},{key:'scored',label:'Scored'},{key:'error',label:'Error'}]" :key="f.key">
                         <button @click="filter = f.key; page = 1; open = false"
                                 class="block w-full text-left px-3 py-1.5 text-[11px] hover:bg-muted transition-colors"
                                 :class="filter === f.key ? 'text-primary font-medium' : ''" x-text="f.label"></button>
@@ -191,11 +198,11 @@
                             </svg>
                             <span class="font-mono text-xs font-medium shrink-0" x-text="caseId"></span>
                             <span class="badge text-xs shrink-0"
-                                  :class="info.eval_result === 'pass' ? 'badge-success' : info.eval_result === 'fail' ? 'badge-destructive' : info.eval_result === 'scored' ? 'badge-scored' : 'status-' + info.status"
+                                  :class="info.eval_result === 'pass' ? 'badge-success' : info.eval_result === 'fail' ? 'badge-destructive' : info.eval_result === 'scored' ? 'badge-scored' : info.eval_result === 'error' ? 'badge-warning' : 'status-' + info.status"
                                   x-text="info.eval_result || info.status"></span>
                             <span class="text-xs text-muted-foreground truncate flex-1 min-w-0" x-text="info.title || getCaseTitle(caseId)"></span>
                             <span class="text-xs text-muted-foreground shrink-0" x-text="(info.turn || '-') + ' turns'"></span>
-                            <span class="text-xs font-medium shrink-0" x-text="info.score != null ? info.score.toFixed(2) : '-'"></span>
+                            <span class="text-xs font-medium shrink-0" x-text="info.eval_result === 'error' ? '—' : (info.score != null ? info.score.toFixed(2) : '-')"></span>
                             <span class="text-xs text-muted-foreground shrink-0 tabular-nums" x-text="caseCostLabel(getCaseReport(caseId), info)"></span>
                             <span x-show="info.error && !info.eval_result" class="text-xs text-destructive truncate max-w-[200px] shrink-0" x-text="info.error"></span>
                         </div>
@@ -261,7 +268,7 @@ function taskDetail(taskId) {
         taskId,
         task: { task_id: taskId, benchmark: '', dataset: '', status: 'pending', total: 0, completed: 0, cases: {}, created_at: '', report_path: null, runtime_target: {} },
         stats: {
-            pass: 0, fail: 0, scored: 0, hasJudged: false,
+            pass: 0, fail: 0, scored: 0, error: 0, gradedCount: 0, hasJudged: false,
             avgScore: '-', passRate: '-',
             totalDuration: '-', totalCostLabel: '—', totalTokens: 0,
             costByRole: { test: '—', target: '—', eval: '—', testVal: 0, targetVal: 0, evalVal: 0 },
@@ -385,10 +392,17 @@ function taskDetail(taskId) {
             this.stats.pass = completed.filter(c => c.eval_result === 'pass').length;
             this.stats.fail = completed.filter(c => c.eval_result === 'fail').length;
             this.stats.scored = completed.filter(c => c.eval_result === 'scored').length;
+            this.stats.error = completed.filter(c => c.eval_result === 'error').length;
             const judged = this.stats.pass + this.stats.fail;
             this.stats.hasJudged = judged > 0;
-            const scores = completed.filter(c => c.score != null).map(c => c.score);
+            // Same rule as the finished report: an ungraded case is not a zero.
+            // This page and the report page show the same run, so if only one of
+            // them excluded them the average would jump the moment a batch ended.
+            const scores = completed
+                .filter(c => c.score != null && c.eval_result !== 'error')
+                .map(c => c.score);
             this.stats.avgScore = scores.length > 0 ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2) : '-';
+            this.stats.gradedCount = scores.length;
             this.stats.passRate = judged > 0 ? (this.stats.pass / judged * 100).toFixed(1) + '%' : '-';
 
             // Duration: compute from report or snapshot
