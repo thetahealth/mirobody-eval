@@ -190,13 +190,29 @@
                                             </div>
                                         </div>
                                     </template>
-                                    <!-- Editable + String → text input -->
+                                    <!-- Editable + String → text input.
+                                         A field may carry `suggestions` (JSON Schema
+                                         `examples`) without being closed like an enum —
+                                         the model name is the case: it has to accept any
+                                         id a provider offers, so it cannot be a dropdown,
+                                         but typed from memory it is guesswork. A datalist
+                                         gives the picker back without closing the field. -->
                                     <template x-if="field.editable && !field.enum">
-                                        <input type="text"
-                                               :value="targetValues[field.name] || ''"
-                                               @input="targetValues[field.name] = $event.target.value"
-                                               :placeholder="field.default || ''"
-                                               class="sh-input">
+                                        <div>
+                                            <input type="text"
+                                                   :value="targetValues[field.name] || ''"
+                                                   @input="targetValues[field.name] = $event.target.value"
+                                                   :placeholder="field.default || ''"
+                                                   :list="field.suggestions ? 'sugg-' + field.name : null"
+                                                   class="sh-input">
+                                            <template x-if="field.suggestions">
+                                                <datalist :id="'sugg-' + field.name">
+                                                    <template x-for="opt in field.suggestions" :key="opt">
+                                                        <option :value="opt"></option>
+                                                    </template>
+                                                </datalist>
+                                            </template>
+                                        </div>
                                     </template>
                                 </div>
                             </template>
@@ -644,6 +660,7 @@ function taskManager() {
                     description: agentField.description || '',
                     required: fieldSpec.required ?? false,
                     enum: agentField.enum || null,
+                    suggestions: agentField.suggestions || null,
                     default: fieldSpec.default ?? agentField.default ?? null,
                     editable: fieldSpec.editable ?? true,
                 });
@@ -750,6 +767,11 @@ function taskManager() {
                         description: prop.description || '',
                         required: required.has(name),
                         enum: enumValues,
+                        // JSON Schema `examples` — suggestions for a field that stays
+                        // open. `model` moved from a 24-entry Literal to a plain string
+                        // so provider-prefixed ids (`dashscope:qwen3.5-flash`) validate;
+                        // without this the picker it used to have becomes a bare box.
+                        suggestions: prop.examples || null,
                         default: prop.default ?? null,
                     });
                 }

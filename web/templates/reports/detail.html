@@ -49,6 +49,11 @@
             <div class="rounded-lg border border-border bg-card p-4">
                 <div class="text-xs text-muted-foreground mb-1">Avg Score</div>
                 <div class="text-2xl font-semibold" x-text="stats.avgScore"></div>
+                <!-- The denominator, whenever it is not every case. Ungraded cases are
+                     left out of this average, and a run where most of them timed out
+                     would otherwise show a healthy number with nothing qualifying it. -->
+                <div x-show="stats.error > 0" class="text-xs text-warning-foreground mt-1"
+                     x-text="`over ${cases.length - stats.error}/${cases.length} graded · ${stats.error} error`"></div>
             </div>
             <div class="rounded-lg border border-border bg-card p-4">
                 <div class="text-xs text-muted-foreground mb-1">Duration</div>
@@ -67,6 +72,7 @@
                 <div class="h-full bg-success" :style="`width: ${cases.length > 0 ? (stats.pass / cases.length * 100) : 0}%`"></div>
                 <div class="h-full bg-destructive" :style="`width: ${cases.length > 0 ? (stats.fail / cases.length * 100) : 0}%`"></div>
                 <div class="h-full bg-blue-400" :style="`width: ${cases.length > 0 ? (stats.scored / cases.length * 100) : 0}%`"></div>
+                <div class="h-full bg-warning" :style="`width: ${cases.length > 0 ? (stats.error / cases.length * 100) : 0}%`"></div>
             </div>
         </div>
 
@@ -151,7 +157,10 @@
                     </button>
                     <div x-show="open" x-transition.opacity.duration.100ms
                          class="absolute z-50 mt-1 left-0 min-w-[80px] rounded-md border border-border bg-popover py-1 shadow-md">
-                        <template x-for="f in [{key:'all',label:'All'},{key:'pass',label:'Pass'},{key:'fail',label:'Fail'},{key:'scored',label:'Scored'}]" :key="f.key">
+                        <!-- `Error` belongs here: these cases are excluded from the
+                             average, so without a filter they are the one group a
+                             reader cannot go look at. -->
+                        <template x-for="f in [{key:'all',label:'All'},{key:'pass',label:'Pass'},{key:'fail',label:'Fail'},{key:'scored',label:'Scored'},{key:'error',label:'Error'}]" :key="f.key">
                             <button @click="filter = f.key; page = 1; open = false"
                                     class="block w-full text-left px-3 py-1.5 text-[11px] hover:bg-muted transition-colors"
                                     :class="filter === f.key ? 'text-primary font-medium' : ''" x-text="f.label"></button>
@@ -196,11 +205,17 @@
                                 </svg>
                                 <span class="font-mono text-xs font-medium shrink-0" x-text="c.id"></span>
                                 <span class="badge text-xs shrink-0"
-                                      :class="c.eval?.result === 'pass' ? 'badge-success' : c.eval?.result === 'fail' ? 'badge-destructive' : c.eval?.result === 'scored' ? 'badge-scored' : 'badge-secondary'"
+                                      :class="c.eval?.result === 'pass' ? 'badge-success' : c.eval?.result === 'fail' ? 'badge-destructive' : c.eval?.result === 'scored' ? 'badge-scored' : c.eval?.result === 'error' ? 'badge-warning' : 'badge-secondary'"
                                       x-text="c.eval?.result || '-'"></span>
                                 <span class="text-xs text-muted-foreground truncate flex-1 min-w-0" x-text="c.title || getCaseTitle(c)"></span>
                                 <span class="text-xs text-muted-foreground shrink-0" x-text="countTurns(c) + ' turns'"></span>
-                                <span class="text-xs font-medium shrink-0" x-text="c.eval?.score != null ? c.eval.score.toFixed(2) : '-'"></span>
+                                <!-- An ungraded case shows no number. Its score field
+                                     is 0.0, and printing that next to the word
+                                     `error` reads as "answered wrong, scored zero" —
+                                     which is the exact confusion this column has to
+                                     avoid. The reason is in the expanded feedback. -->
+                                <span class="text-xs font-medium shrink-0"
+                                      x-text="c.eval?.result === 'error' ? '—' : (c.eval?.score != null ? c.eval.score.toFixed(2) : '-')"></span>
                                 <span class="text-xs text-muted-foreground shrink-0 tabular-nums" x-text="caseCostLabel(c)"></span>
                                 <span class="text-xs text-muted-foreground shrink-0" x-text="calcDuration(c)"></span>
                             </div>
@@ -252,7 +267,7 @@ function reportViewer(benchmark, filename) {
         dateLabel: '',
         cases: [],
         stats: {
-            pass: 0, fail: 0, scored: 0, hasJudged: false,
+            pass: 0, fail: 0, scored: 0, error: 0, hasJudged: false,
             avgScore: '-', passRate: '-',
             totalDuration: '-', totalCostLabel: '—', totalTokens: 0,
             costByRole: { test: '—', target: '—', eval: '—', testVal: 0, targetVal: 0, evalVal: 0 },
@@ -344,9 +359,17 @@ function reportViewer(benchmark, filename) {
             this.stats.pass = evaluated.filter(c => c.eval.result === 'pass').length;
             this.stats.fail = evaluated.filter(c => c.eval.result === 'fail').length;
             this.stats.scored = evaluated.filter(c => c.eval.result === 'scored').length;
+            this.stats.error = evaluated.filter(c => c.eval.result === 'error').length;
             const judged = this.stats.pass + this.stats.fail;
             this.stats.hasJudged = judged > 0;
-            const scores = evaluated.filter(c => c.eval?.score != null).map(c => c.eval.score);
+            // Same rule as the CLI report: a case that never got graded is not a
+            // zero. `error` carries score 0.0 but that 0 is not a result, and
+            // averaging it in makes a timed-out or unjudged run look like a bad
+            // one. The count is surfaced beside the average so the denominator
+            // stays visible.
+            const scores = evaluated
+                .filter(c => c.eval?.score != null && c.eval.result !== 'error')
+                .map(c => c.eval.score);
             this.stats.avgScore = scores.length > 0 ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(2) : '-';
             this.stats.passRate = judged > 0 ? (this.stats.pass / judged * 100).toFixed(1) + '%' : '-';
 
@@ -384,12 +407,17 @@ function reportViewer(benchmark, filename) {
             for (const [tag, items] of Object.entries(tagData)) {
                 const passCount = items.filter(i => i.eval.result === 'pass').length;
                 const failCount = items.filter(i => i.eval.result === 'fail').length;
+                const errorCount = items.filter(i => i.eval.result === 'error').length;
                 const judged = passCount + failCount;
-                const scores = items.filter(i => i.eval?.score != null).map(i => i.eval.score);
+                // Ungraded cases stay out of the average — see computeStats().
+                const scores = items
+                    .filter(i => i.eval?.score != null && i.eval.result !== 'error')
+                    .map(i => i.eval.score);
                 stats[tag] = {
                     total: items.length,
                     pass_count: passCount,
                     fail_count: failCount,
+                    error_count: errorCount,
                     pass_rate: judged > 0 ? passCount / judged : 0,
                     avg_score: scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0,
                 };

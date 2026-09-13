@@ -179,8 +179,14 @@ class BenchReport(BaseModel):
     cases: List[TestResult] = Field(description="用例结果列表")
     pass_count: int = Field(default=0)
     fail_count: int = Field(default=0)
+    error_count: int = Field(
+        default=0,
+        description="没判成分的用例数（超时/连接失败/判分器不可用/被取消）。"
+        "不计入 pass/fail，也不计入 avg_score —— 所以读 avg_score 必须同时读它，"
+        "否则一个大面积失败的跑批会显示成漂亮的高分",
+    )
     pass_rate: float = Field(default=0.0)
-    avg_score: float = Field(default=0.0)
+    avg_score: float = Field(default=0.0, description="平均分，分母只含判成了分的用例（不含 error）")
     total_duration_seconds: float = Field(default=0.0)
     stats_by_tag: dict[str, dict] = Field(default_factory=dict)
     started_at: datetime = Field(default_factory=datetime.now)
@@ -315,18 +321,27 @@ def find_target_spec(specs: List[TargetSpec], target_type: str | None = None) ->
 
     Args:
         specs:       TargetSpec 列表（来自 metadata.json）
-        target_type: 目标类型（如 "llm_api"），None 时使用第一个
+        target_type: 目标类型（如 "llm_api"）。只有一个候选时可以不给
 
     Returns:
         匹配的 TargetSpec
 
     Raises:
-        ValueError: 列表为空或 target_type 不匹配
+        ValueError: 列表为空、有多个候选却没指定、或 target_type 不匹配
     """
     if not specs:
         raise ValueError("metadata.json 中未定义 target 配置")
     if target_type is None:
-        return specs[0]
+        if len(specs) == 1:
+            return specs[0]
+        # 多个候选时不猜。以前是无条件返回 specs[0] —— 而 eslbench 的 metadata 把
+        # `mirobody` 排在第一位,于是 README 里少写了 `--target-type` 的那条命令会
+        # 静默选中 mirobody、跑到连数据库时才失败,报错说的是「数据库 admin 不存在」,
+        # 跟真实原因（没说要测哪个系统）毫无关系。
+        raise ValueError(
+            f"该数据集有 {len(specs)} 个可测系统，必须用 --target-type 指定一个: "
+            f"{[s.type for s in specs]}"
+        )
     for spec in specs:
         if spec.type == target_type:
             return spec
@@ -512,6 +527,37 @@ def bench_item_to_test_case(
     )
 
 
+def compute_stats_by_tag(test_results: list[TestResult]) -> dict[str, dict]:
+    """按 tag 分组统计 —— CLI 报告和 Web UI 共用这一份。
+
+    以前是两份:`build_bench_report` 一份、`web/app/services/task_manager.py`
+    一份。两份算的是同一个东西，但「平均分要不要排除没判成分的用例」这条规则
+    只在一份里修，另一份就继续用旧口径 —— 一个 tag 的分数会因为你从 CLI 还是
+    从网页看而不同。规则只写一次，就不会有那种分歧。
+    """
+    tag_results: dict[str, list[TestResult]] = {}
+    for result in test_results:
+        for tag in result.tags:
+            tag_results.setdefault(tag, []).append(result)
+
+    stats: dict[str, dict] = {}
+    for tag, results in tag_results.items():
+        tag_pass = sum(1 for r in results if r.eval.result == "pass")
+        tag_fail = sum(1 for r in results if r.eval.result == "fail")
+        tag_error = sum(1 for r in results if r.eval.result == "error")
+        tag_judged = tag_pass + tag_fail
+        tag_scored = [r for r in results if r.eval.result != "error"]
+        stats[tag] = {
+            "total": len(results),
+            "pass_count": tag_pass,
+            "fail_count": tag_fail,
+            "error_count": tag_error,
+            "pass_rate": tag_pass / tag_judged if tag_judged else 0.0,
+            "avg_score": (sum(r.eval.score for r in tag_scored) / len(tag_scored)) if tag_scored else 0.0,
+        }
+    return stats
+
+
 def build_bench_report(
     test_results: list[TestResult],
     benchmark_name: str,
@@ -524,30 +570,20 @@ def build_bench_report(
     """从 TestResult 列表构建 BenchReport"""
     pass_count = sum(1 for r in test_results if r.eval.result == "pass")
     fail_count = sum(1 for r in test_results if r.eval.result == "fail")
+    error_count = sum(1 for r in test_results if r.eval.result == "error")
     judged = pass_count + fail_count  # 有 pass/fail 判定的用例数（不含 scored）
     pass_rate = pass_count / judged if judged else 0.0
-    avg_score = sum(r.eval.score for r in test_results) / len(test_results) if test_results else 0.0
+    # 平均分只在「判成了分」的用例上算。error 的 score 恒为 0.0，但那个 0 不是
+    # 成绩 —— 把它算进分母和分子，等于让没跑完的用例按 0 分拉低被测系统的成绩。
+    # 这一条此前漏了:`pass_rate` 的分母早就排除了 error，`avg_score` 没有，所以
+    # 连判分器不可用那条本来做对了的路（`JudgeUnavailable` → error）也一直在
+    # 被算作 0 分。`error_count` 与之配套发布 —— 排除了就必须让分母可见,否则
+    # 一个大面积失败的跑批会显示成漂亮的高分。
+    scored_results = [r for r in test_results if r.eval.result != "error"]
+    avg_score = sum(r.eval.score for r in scored_results) / len(scored_results) if scored_results else 0.0
     total_duration = sum((r.end - r.start).total_seconds() for r in test_results)
 
-    # 按 tag 分组统计
-    stats_by_tag: dict[str, dict] = {}
-    tag_results: dict[str, list[TestResult]] = {}
-    for result in test_results:
-        for tag in result.tags:
-            tag_results.setdefault(tag, []).append(result)
-
-    for tag, results in tag_results.items():
-        tag_pass = sum(1 for r in results if r.eval.result == "pass")
-        tag_fail = sum(1 for r in results if r.eval.result == "fail")
-        tag_judged = tag_pass + tag_fail
-        tag_total = len(results)
-        stats_by_tag[tag] = {
-            "total": tag_total,
-            "pass_count": tag_pass,
-            "fail_count": tag_fail,
-            "pass_rate": tag_pass / tag_judged if tag_judged else 0.0,
-            "avg_score": sum(r.eval.score for r in results) / tag_total if tag_total else 0.0,
-        }
+    stats_by_tag = compute_stats_by_tag(test_results)
 
     # 读一次数据集来源，写进报告：一个分数必须能指回它跑的是哪一期。
     # 解析失败不该让一份跑完的报告丢掉 —— 来源缺失只是少了追溯信息。
@@ -567,6 +603,7 @@ def build_bench_report(
         cases=test_results,
         pass_count=pass_count,
         fail_count=fail_count,
+        error_count=error_count,
         pass_rate=pass_rate,
         avg_score=avg_score,
         total_duration_seconds=total_duration,

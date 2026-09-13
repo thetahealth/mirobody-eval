@@ -30,7 +30,10 @@ ESL-Bench 这个基准好，不是 mirobody 好。
                        目录找，而 runner 的工作目录是本仓库、不是那个部署 —— 那样
                        会静默退回内置默认值，错误信息指向一个不存在的库名
 - `MIROBODY_BASE_URL`  被测部署地址（默认 http://localhost:18080）
-- `MIROBODY_TIMEOUT`   单轮超时秒数（默认 300）
+- `MIROBODY_TIMEOUT`   单轮超时秒数。不给就用框架统一口径 `AGENT_LLM_TIMEOUT`
+                       （默认 840）—— 一轮是一次 `/api/chat`，部署侧在里面跑完
+                       整个 agent 循环（重题实测 61 次 LLM 调用 / 567s），所以
+                       这个预算必须比单次调用的大，而不是更小
 - `MIROBODY_PROVIDER`  覆盖 agent 的 LLM provider。留空用部署自己的默认值 ——
                        它按哪个 key 可用来选（OPENROUTER 走 claude-sonnet，
                        DASHSCOPE 走 qwen），所以配好了 key 的部署通常不需要设这个。
@@ -52,6 +55,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from evaluator.core.interfaces.abstract_target_agent import AbstractTargetAgent
 from evaluator.core.schema import SessionInfo, TargetAgentReaction, TestAgentAction
+from evaluator.utils.config import get_agent_llm_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +124,17 @@ class MirobodyTargetAgent(AbstractTargetAgent, name="mirobody", params_model=Mir
         self.config: MirobodyTargetInfo = target_config
 
         self.base_url = os.environ.get("MIROBODY_BASE_URL", "http://localhost:18080").rstrip("/")
-        self.timeout = float(os.environ.get("MIROBODY_TIMEOUT", "300"))
+        # 默认取框架统一口径（`AGENT_LLM_TIMEOUT`），而不是本模块自己的字面量。
+        #
+        # 上一版默认 300s，比框架给「单次 LLM 调用」的预算还小 —— 而这里一轮是
+        # 一次 `/api/chat`，部署侧在里面自己跑完整个 agent 循环:跨全量统计的题
+        # 实测 61 次 LLM 调用 + 41 次沙箱计算、耗时 567s。所以 300s 不是配得紧,
+        # 是量级不对,后果是重题被判 0 分而不是被判错 —— 同一道题在 300s 下得
+        # 0.00、在 900s 下得 0.89,一个随评测方配置变化的数不是被测系统的属性。
+        #
+        # `MIROBODY_TIMEOUT` 保留:它和 `AGENT_LLM_TIMEOUT` 是两个粒度(整轮 vs
+        # 单次调用),不是重复的旋钮。
+        self.timeout = float(os.environ.get("MIROBODY_TIMEOUT") or get_agent_llm_timeout())
         # provider 属于"打哪个部署、用它哪个模型"这类基础设施参数，从 env 读，
         # 不写进题库 —— 题库不该锚定某个模型。config 里显式给的优先。
         self.provider = target_config.provider or os.environ.get("MIROBODY_PROVIDER", "")

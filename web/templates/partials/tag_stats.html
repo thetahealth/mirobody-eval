@@ -1,4 +1,8 @@
-<!-- Tag group stats card — requires parent Alpine scope to provide tagStats object (key=tag, value={total, pass_count, fail_count, pass_rate, avg_score}) -->
+<!-- Tag group stats card — requires parent Alpine scope to provide tagStats object
+     (key=tag, value={total, pass_count, fail_count, error_count, pass_rate, avg_score}).
+     `error_count` are cases that never got graded (timeout, judge outage, cancelled);
+     they are excluded from avg_score, which is why the average is annotated with the
+     count it was taken over. -->
 <div x-show="Object.keys(tagStats).length > 0" class="rounded-lg border border-border bg-card p-5 mb-5">
     <div class="flex items-center justify-between mb-3">
         <h3 class="text-sm font-medium">Tag Stats</h3>
@@ -29,11 +33,23 @@
                             <span x-show="s.pass_count + s.fail_count > 0" x-text="(s.pass_rate * 100).toFixed(1) + '%'"></span>
                             <span x-show="s.pass_count + s.fail_count === 0" class="text-muted-foreground">—</span>
                         </td>
-                        <td class="text-right py-2 px-3 tabular-nums" x-text="s.avg_score.toFixed(2)"></td>
+                        <!-- The average excludes ungraded cases, so it is shown with
+                             how many it was taken over. Without that, a tag whose
+                             cases mostly timed out reads as a strong score. -->
+                        <td class="text-right py-2 px-3 tabular-nums">
+                            <span x-text="s.total > (s.error_count || 0) ? s.avg_score.toFixed(2) : '—'"></span>
+                            <span x-show="s.error_count > 0" class="text-muted-foreground text-[10px]"
+                                  x-text="` (${s.total - s.error_count}/${s.total})`"></span>
+                        </td>
                         <td class="py-2 pl-4">
                             <div class="h-2 bg-secondary rounded-full overflow-hidden flex w-full">
                                 <div class="h-full bg-success" :style="`width: ${s.total > 0 ? (s.pass_count / s.total * 100) : 0}%`"></div>
                                 <div class="h-full bg-destructive" :style="`width: ${s.total > 0 ? (s.fail_count / s.total * 100) : 0}%`"></div>
+                                <!-- Ungraded segment. The bar used to be pass+fail only,
+                                     so an ungraded case just left empty track that read
+                                     as "nothing happened here" rather than "this did not
+                                     get graded". -->
+                                <div class="h-full bg-warning" :style="`width: ${s.total > 0 ? ((s.error_count || 0) / s.total * 100) : 0}%`"></div>
                             </div>
                         </td>
                     </tr>

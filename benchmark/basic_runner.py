@@ -79,7 +79,7 @@ async def run_benchmark(
         benchmark:       评测类型（如 "healthbench"）
         dataset:         数据集名称（如 "sample"）
         cli_overrides:   CLI/UI 传入的 target 覆盖参数（仅 editable 字段生效）
-        target_type:     目标系统类型（多 target 时指定，如 "llm_api"），None 时使用第一个
+        target_type:     目标系统类型（如 "llm_api"）；仅有一个候选时可省略
         ids:             逗号分隔的 ID（仅运行指定用例）
         limit:           最大用例数
         max_concurrency: 最大并发数（0 = 不限制）
@@ -356,6 +356,14 @@ async def _resume_benchmark(
 # ============================================================
 
 
+def _avg_cell(stats: dict, precision: int = 2) -> str:
+    """Show the grading denominator; an empty graded subset has no average."""
+    total = stats["total"]
+    graded = total - stats.get("error_count", 0)
+    average = f"{stats['avg_score']:.{precision}f}" if graded else "—"
+    return f"{average} （{graded}/{total} 条已评分）"
+
+
 def _print_grouped_stats(stats_by_tag: dict, prefix: str, title: str) -> None:
     """打印特定 tag 前缀（如 hallu_type:）的分组统计，按 avg_score 降序。"""
     rows = [
@@ -367,9 +375,12 @@ def _print_grouped_stats(stats_by_tag: dict, prefix: str, title: str) -> None:
         return
     rows.sort(key=lambda x: -x[1]["avg_score"])
     print(f"\n按{title}统计:")
-    print(f"  {'类别':<14} {'条数':>6}  {'通过率':>8}  {'平均分':>8}")
+    print(f"  {'类别':<14} {'条数':>6}  {'通过率':>8}  {'未判成':>6}  平均分（已评分/总数）")
     for name, s in rows:
-        print(f"  {name:<14} {s['total']:>6}  {s['pass_rate']:>7.1%}  {s['avg_score']:>8.3f}")
+        print(
+            f"  {name:<14} {s['total']:>6}  {s['pass_rate']:>7.1%}"
+            f"  {s.get('error_count', 0):>6}  {_avg_cell(s, precision=3)}"
+        )
 
 
 def _print_summary(report: BenchReport, report_path: Path) -> None:
@@ -380,12 +391,15 @@ def _print_summary(report: BenchReport, report_path: Path) -> None:
     print("跑分完成")
     print(sep)
     print(f"  数据集:    {report.benchmark_name}/{report.dataset_name}")
-    print(f"  被测系统:  {report.runtime_target.type} ({getattr(report.runtime_target, 'model', 'N/A')})")
+    target = report.runtime_target
+    print(f"  被测系统:  {getattr(target, 'type', 'N/A')} ({getattr(target, 'model', 'N/A')})")
     print(f"  总用例:    {len(report.cases)}")
     print(f"  通过:      {report.pass_count}")
     print(f"  失败:      {report.fail_count}")
+    print(f"  未判成:    {report.error_count}")
     print(f"  通过率:    {report.pass_rate:.1%}")
-    print(f"  平均得分:  {report.avg_score:.2f}")
+    summary = {"total": len(report.cases), "error_count": report.error_count, "avg_score": report.avg_score}
+    print(f"  平均得分:  {_avg_cell(summary)}")
     print(f"  总耗时:    {report.total_duration_seconds:.1f}s")
 
     # 按主类别分组（hallu_type:* 或 dim:* 等命名空间的 tag 优先展示为独立分组）
@@ -396,7 +410,10 @@ def _print_summary(report: BenchReport, report_path: Path) -> None:
     if report.stats_by_tag:
         print("\n按标签统计（全部）:")
         for tag, stats in sorted(report.stats_by_tag.items()):
-            print(f"  [{tag}] {stats['total']} 条, 通过率 {stats['pass_rate']:.1%}, 平均分 {stats['avg_score']:.2f}")
+            print(
+                f"  [{tag}] {stats['total']} 条, 通过率 {stats['pass_rate']:.1%},"
+                f" 未判成 {stats.get('error_count', 0)} 条, 平均分 {_avg_cell(stats)}"
+            )
 
     # 失败用例
     failed = [c for c in report.cases if c.eval.result == "fail"]
@@ -407,6 +424,19 @@ def _print_summary(report: BenchReport, report_path: Path) -> None:
             print(f"  - {c.id}: score={c.eval.score:.2f}, {feedback}")
         if len(failed) > 20:
             print(f"  ... 还有 {len(failed) - 20} 条")
+
+    errors = [c for c in report.cases if c.eval.result == "error"]
+    if errors:
+        print(f"\n未判成的用例 ({len(errors)} 条):")
+        for c in errors[:20]:
+            lines = (c.eval.feedback or "").strip().splitlines()
+            note = lines[0][:160] if lines else "No feedback provided"
+            detail = (c.eval.trace.eval_detail or {}) if c.eval.trace else {}
+            exception_type = detail.get("exception_type")
+            label = f"[{exception_type}] " if exception_type else ""
+            print(f"  - {c.id}: {label}{note}")
+        if len(errors) > 20:
+            print(f"  ... 还有 {len(errors) - 20} 条")
 
     print(f"\n报告: {report_path}")
     print(sep)
