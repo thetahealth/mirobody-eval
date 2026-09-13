@@ -5,7 +5,7 @@
 </h1>
 
 <p align="center">
-  <strong>Reproduce any LLM benchmark with one command. Build your own with pluggable agents.<br>No code required — just talk to Claude Code.</strong>
+  <strong>Five benchmarks ship in the repo; one command reproduces any of them. The virtual user, the target and the judge are all pluggable.<br>Seven Claude Code slash commands guide you from ingesting a paper to reading a report.</strong>
 </p>
 
 <p align="center">
@@ -52,28 +52,28 @@ mirobody-eval is the evaluation half of [mirobody](https://github.com/thetahealt
 
 Built from the ground up as a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) native project — every workflow, from initial setup to integrating a new benchmark from a research paper, is an interactive slash command. You describe what you want in natural language, and Claude Code handles the rest. **You don't need to write a single line of code to use or extend this framework.**
 
-### Integrate any benchmark — just paste the paper link
+### From paper to benchmark — `/add-benchmark`
 
 <p align="center">
   <img src="docs/screenshots/holyeval_add_benchmark.gif" alt="Add Benchmark Demo" width="80%">
 </p>
 
-> **From paper to scored report in one conversation.** Paste a link, Claude Code reads the paper, writes the converter, creates datasets, validates — done. No boilerplate, no manual file creation.
+> Paste a paper link and `/add-benchmark` walks Claude Code through reading the paper, writing the converter and generating the datasets — then runs a sample and **checks the conversion against the numbers the paper published**. Everything lands in data and plugin directories; the framework core is never touched.
 
-### Run any benchmark with one command
+### One command runs all five benchmarks
 
 <p align="center">
   <img src="docs/screenshots/holyeval_run_benchmark.gif" alt="Run Benchmark Demo" width="80%">
 </p>
 
 ```bash
-# Try it out — each command costs < $0.05 with --limit 3
+# Start with a few cases; cost and runtime depend on the models and benchmark
 uv run python -m benchmark.basic_runner healthbench sample --target-model gpt-5.4-mini --limit 3
 uv run python -m benchmark.basic_runner medcalc sample --target-model gpt-5.4-mini --limit 3
 uv run python -m benchmark.basic_runner virtual_user round1 --target-type llm_api --target-model gpt-5.4-mini --limit 3
 
 # ESLBench requires data preparation first (see Quick Start below)
-uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-model gpt-5.4-mini --limit 3
+uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-type llm_api --target-model gpt-5.4-mini --limit 3
 
 # Ready for a full run? Remove --limit to run the entire dataset
 ```
@@ -82,13 +82,14 @@ uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-mode
 
 | | |
 |---|---|
-| **Paper → benchmark in one conversation** | Paste a paper link, Claude Code reads it, writes the converter, creates datasets, validates — done |
-| **One-command reproduction** | Reproduce any integrated benchmark forever with a single CLI command |
-| **Pluggable architecture** | Three agent types (TestAgent, TargetAgent, EvalAgent) — extend any of them with a single class |
-| **Multi-turn dialogue** | Simulates real user conversations, not just single-turn Q&A |
-| **Batch execution** | Concurrent runs with real-time progress, cancellation, and checkpoint resume |
-| **Web UI** | Visual dashboard for running evaluations, viewing reports, and browsing datasets |
-| **AI-native** | Built for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — set up, run, and extend the project through natural language, zero boilerplate |
+| **Paper → benchmark** | Paste a paper link and `/add-benchmark` reads it, writes the converter, generates the datasets — then validates the conversion against the scores the paper published |
+| **One-command reproduction** | Every bundled benchmark runs through the same `basic_runner` command; reports carry the batch id and sha256 checksum a score came from |
+| **Ungraded is not zero** | Timeouts, connection failures and judge outages are recorded as `error` and excluded from the average; every summary prints the ungraded count next to the graded denominator — no fake zeros, no inflated averages |
+| **Pluggable architecture** | The virtual user, the target and the judge are each one plugin class; a file dropped into the plugin directory registers itself, and the framework core stays untouched |
+| **Sessions, not single turns** | TestAgent ↔ TargetAgent converse until a stop condition; the judge sees the full trajectory, not one Q&A pair |
+| **Batch execution** | Concurrent and cancellable; an interrupted run leaves a checkpoint and `--resume` skips the completed cases |
+| **Web UI** | Launch runs, SSE progress, per-case reports — converging on the same execution entry point as the CLI, `do_single_test()` |
+| **AI-native** | Seven guided slash commands, `/quick-start` through `/eslbench-report-analysis`, from environment setup to report analysis |
 
 ## Quick Start
 
@@ -99,51 +100,88 @@ Or manually:
 ```bash
 git clone https://github.com/thetahealth/mirobody-eval.git && cd mirobody-eval
 uv sync
-cp .env.example .env                    # add your OPENAI_API_KEY or GOOGLE_API_KEY
+cp .env.example .env                    # edit .env and enter your provider's real key
 
-# Run your first benchmark (< $0.02)
+# With OPENAI_API_KEY or OPENROUTER_API_KEY configured
 uv run python -m benchmark.basic_runner healthbench sample --target-model gpt-5.4-mini --limit 2
 
 # Launch Web UI
 uv run python -m web                    # http://localhost:8000
 ```
 
-> **Prerequisites:** Python 3.11+, [uv](https://docs.astral.sh/uv/), at least one LLM API key (OpenAI or Google Gemini).
+> **Prerequisites:** Python 3.11+, [uv](https://docs.astral.sh/uv/), at least one LLM API key.
+> The example above uses OpenAI models for both the target and the judge. Configure
+> `OPENAI_API_KEY`, or configure `OPENROUTER_API_KEY` and leave `OPENAI_API_KEY`
+> unset to route those model IDs through OpenRouter. Your account must have access
+> to the requested models. This configures the evaluation process; a mirobody
+> deployment needs its own model and embedding configuration.
 >
-> **ESLBench data prep:** ESLBench requires downloading data from HuggingFace first — run `uv run python -m generator.eslbench.prepare_data` (automatic via Web UI). Other benchmarks ship with data included.
+> **ESLBench data prep:** Run `uv run python -m generator.eslbench.prepare_data`
+> before evaluating ESLBench (also started in the background by the Web UI; wait
+> for it to finish). It checks all manifest batches and downloads missing or changed
+> batches, including user data and question banks, then builds DuckDB files. It is
+> not a single-user download and can take substantial disk space and time. Other
+> benchmarks ship their question files with the repository.
+
+If you only have a Google or DashScope key, also select models for the roles that
+call an LLM. Set the matching key in `.env`, replace `YOUR_MODEL_ID` below with a
+model available to your account, and run:
+
+```bash
+MODEL=google:YOUR_MODEL_ID              # or dashscope:YOUR_MODEL_ID
+uv run python -m benchmark.basic_runner healthbench sample \
+    --target-type llm_api --target-model "$MODEL" --eval-model "$MODEL" --limit 2
+```
+
+For `virtual_user`, also pass `--user-model "$MODEL"`. Setting a provider key alone
+does not replace the other roles' OpenAI defaults. See [Configuration](#configuration)
+for all supported prefixes.
 
 ## Evaluate your own mirobody deployment
 
-This is what mirobody-eval is for. A fresh [mirobody](https://github.com/thetahealth/mirobody)
-install has an empty database, so there is nothing to ask it about and no way to tell whether a
-change you made helped. Three commands fix both:
+Use a running [mirobody](https://github.com/thetahealth/mirobody) deployment whose
+Postgres and Redis are reachable from the evaluation process. Demo data already in
+the deployment may belong to different users; seed the user required by the chosen
+questions before evaluating it.
+
+From the mirobody-eval repository, configure an evaluation LLM key as in Quick Start.
+The deployment needs a working chat provider and embedding provider, plus the same
+JWT configuration used by the evaluation process. If its config is encrypted, make
+the deployment's `CONFIG_ENCRYPTION_KEY` available to the seeder and runner as well.
+Install the optional dependency before seeding (it requires Python 3.12+):
 
 ```bash
-# 1. Pull one synthetic user's five-year trajectory from HuggingFace (~20 MB)
+# 1. Install the engine integration
+uv sync --extra mirobody --python 3.12
+
+# 2. Prepare all missing or changed ESLBench batches (not just one user)
 uv run python -m generator.eslbench.prepare_data
 
-# 2. Load it into your deployment's Postgres, and make the indicators searchable
-export MIROBODY_CONFIG=/abs/path/to/your/mirobody/config.localdb.yaml   # which deployment
+# 3. Point to your deployment; replace both values with your actual settings
+export MIROBODY_CONFIG=/abs/path/to/your/mirobody/config.localdb.yaml
+export MIROBODY_BASE_URL=http://localhost:18080
+
+# 4. Seed the user whose questions will be run
 uv run python -m generator.eslbench.seed_mirobody --users user5086@demo
 
-# 3. Score your deployment on ESL-Bench
-uv run python -m benchmark.basic_runner eslbench sample200-20260430 --target-type mirobody --limit 20
+# 5. Smoke-test only that user's questions; --limit alone does not filter users
+uv run python -m benchmark.basic_runner eslbench sample200-20260430 \
+    --target-type mirobody \
+    --ids user5086_AT_demo_Q001,user5086_AT_demo_Q087,user5086_AT_demo_Q067 -p 1
 ```
 
-You now have a number for the five ESL-Bench reasoning dimensions — Lookup, Trend, Comparison,
-Anomaly, Explanation. Change the model, switch agent type, edit a prompt, add a tool, re-run, and
-see which dimensions moved. Point `--target-type llm_api` at the same questions for a
-retrieval-only baseline to compare against.
+Use the HTTP address actually exposed by your deployment; if it publishes port
+18060, use `http://localhost:18060`. A Docker-only database address in its config
+may not be reachable from a runner on the host. Seeding checks indicator searchability
+and reports missing embeddings before you start the evaluation.
 
-> **Prerequisites for step 2:** `uv sync --extra mirobody --python 3.12` (the engine is 3.12+, while
-> this project itself runs on 3.11, so the extra is a no-op on 3.11) with config pointing at the deployment you
-> want to seed, plus a working embedding-provider key. Seeding verifies afterwards that every
-> indicator is actually reachable by the agent and **fails loudly if not** — the alternative is a
-> database that looks full while the agent answers "I don't have your health data", with nothing in
-> the logs to explain why.
->
-> **Prerequisites for step 3:** the deployment's HTTP server running (`MIROBODY_BASE_URL`, default
-> `http://localhost:18080`).
+These three cases check the connection and scoring; they do not cover all five
+ESL-Bench dimensions or establish a benchmark score. For a larger run, seed every
+user referenced by the selected cases. To compare with a model using retrieval
+tools, keep the same dataset and IDs and use `--target-type llm_api` with
+`--target-model`. The model behind `--target-type mirobody` is configured in that
+deployment. To launch runs in the Web UI, start `uv run python -m web` from this
+configured shell, then select the same case IDs.
 
 ### The file-upload demo
 
@@ -156,6 +194,9 @@ question instead of a single point:
 uv run python -m generator.eslbench.seed_mirobody --users user5086@demo --hold-out-exams 1
 uv run python -m generator.eslbench.labreport     --users user5086@demo -o samples/lab_report.pdf
 ```
+
+This demo omits the latest exam from the seeded history. Before running benchmark
+questions that use the complete history, seed again without `--hold-out-exams`.
 
 `user5086@demo` is a generated 58-year-old with type 2 diabetes whose lipids improve and then drift
 back across four panels. Every value is synthetic; the PDF says so on its front page.
@@ -181,6 +222,7 @@ mirobody-eval is designed to be operated entirely through [Claude Code](https://
 | **Add a custom evaluator** | `/add-eval-agent` | Scaffolds config model + plugin implementation + registration. Immediately available in CLI & Web UI |
 | **Add a new target system** | `/add-target-agent` | Scaffolds connection handling, message processing, and cleanup for a new system under test |
 | **Audit architecture** | `/review-architecture` | Checks GitOps compliance, plugin isolation, shared-layer reuse. Reports violations with fix suggestions |
+| **Read a run's report** | `/eslbench-report-analysis` | Breaks scores down by difficulty dimension, compares methods, surfaces failure rates and per-question cost/duration |
 
 ### Workflow Examples
 
@@ -239,6 +281,16 @@ Launch with `uv run python -m web`, then visit http://localhost:8000.
 ## Health Memory Arena — Live Evaluation Platform
 
 [Health Memory Arena](http://healthmemoryarena.ai) (HMA) is the public evaluation platform powered by mirobody-eval. It hosts the ESL-Bench leaderboard where health AI agents compete on structured longitudinal reasoning tasks.
+
+> **Where this repository stops.** For any batch whose answers are released,
+> reproducing its leaderboard scores works end to end here — fetch the dataset,
+> run it, and the report carries the batch id and checksum it came from. Under
+> the rolling release policy **the newest batch's answers stay unreleased until
+> the next one ships**, so its scores cannot be graded locally until then.
+> Separately, **publishing a benchmark of your own to HuggingFace, and
+> submitting a result to the leaderboard, are the two steps whose tooling is
+> not open-sourced yet.** Open an issue if you want to get on the board and we
+> will prioritise accordingly.
 
 <table>
 <tr>
@@ -341,15 +393,15 @@ Key findings: DB agents (48–58%) substantially outperform memory RAG (30–38%
 # First time: prepare data (automatic via Web UI, manual for CLI)
 uv run python -m generator.eslbench.prepare_data
 
-# Quick test: 3 cases to verify setup (< $0.05)
-uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-model gpt-5.4-mini --limit 3
+# Quick test: start with 3 cases to verify setup
+uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-type llm_api --target-model gpt-5.4-mini --limit 3
 
 # Sample datasets
-uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-model gpt-5.4-mini      # 50 cases
-uv run python -m benchmark.basic_runner eslbench sample500-20260331 --target-model gpt-5.4-mini -p 5 # 500 cases
+uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-type llm_api --target-model gpt-5.4-mini      # 50 cases
+uv run python -m benchmark.basic_runner eslbench sample500-20260331 --target-type llm_api --target-model gpt-5.4-mini -p 5 # 500 cases
 
 # Full benchmark (4500 cases — significant API cost, review before running)
-uv run python -m benchmark.basic_runner eslbench full-20260331 --target-model gpt-5.4-mini -p 5
+uv run python -m benchmark.basic_runner eslbench full-20260331 --target-type llm_api --target-model gpt-5.4-mini -p 5
 ```
 
 The LLM target is equipped with a tool group (`eslbench/retrieve`) that provides JSON file reading, DuckDB queries, and indicator lookup — the LLM must use these tools to find answers in the user's health data.
@@ -465,37 +517,87 @@ uv run python -m benchmark.basic_runner virtual_user round1 \
     --eval-model anthropic/claude-sonnet-4.6
 ```
 
-The judge is consulted only for `text` and `behavioral` answers. `numeric_value`, `boolean` and
-`list` are scored by rule and need no key at all — 106 of the 200 cases in ESL-Bench's
-`sample200-20260430` are in that group. When a judge is configured but cannot run, its cases are
-reported as `error` rather than scored: a judge that never ran has said nothing about the target,
-and averaging it in would read as a result.
+For ESL-Bench's `kg_qa` evaluator, `text` and `behavioral` answers use an LLM judge;
+`numeric_value`, `boolean` and `list` use rules. Rule-based grading does not require
+a judge key, but the target may still require an LLM key to answer the question.
+
+Timeouts, cancellations and execution exceptions are reported as `error`. The
+average includes only `pass`, `fail` and `scored` cases. CLI summaries show the
+error count and the number graded out of the total; if none were graded, the
+average displays as `—`. Always compare coverage alongside the average: a high
+score over a few completed cases is not a full-dataset result. Saved JSON keeps
+`avg_score: 0.0` when no grades exist, so consumers must also read `error_count`
+and the case count. Other evaluators may have their own failure handling.
 
 ## Configuration
 
-Environment variables (in `.env`):
+Set the key for each provider used by the target, judge and virtual user in `.env`.
+The bundled defaults use OpenAI models. OpenAI or OpenRouter can serve those defaults;
+other providers require explicit model choices for each LLM role.
 
-| Variable | Required | Description |
+| Variable | When needed | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | At least one | OpenAI API key |
-| `GOOGLE_API_KEY` | At least one | Google Gemini API key |
-| `HF_TOKEN` | ESLBench | HuggingFace token for downloading benchmark data |
-| `OPENROUTER_API_KEY` | Optional | OpenRouter multi-provider access |
-| `HOLYEVAL_GATEWAY_BASE_URL` | Optional | Your own OpenAI-compatible gateway (vLLM / LiteLLM / a proxy). Required only when a model name is written as `[label]model` |
-| `HOLYEVAL_GATEWAY_API_KEY` | Optional | API key for that gateway |
-| `HOLYEVAL_WEB_PORT` | Optional | Web UI port (default: 8000) |
-| `HOLYEVAL_HEALTH_PORT` | Optional | Health-check port (default: 8001) |
-| `HOLYEVAL_RELOAD` | Optional | `true` enables uvicorn auto-reload (default: false) |
+| `OPENAI_API_KEY` | OpenAI models | Direct OpenAI API access |
+| `OPENROUTER_API_KEY` | OpenRouter models | Also used for unprefixed `gpt*` names when `OPENAI_API_KEY` is unset |
+| `GOOGLE_API_KEY` / `GEMINI_API_KEY` | Google models | Select a `google:` or `gemini*` model; Vertex AI can use Application Default Credentials instead |
+| `DASHSCOPE_API_KEY` | `dashscope:` | Alibaba DashScope |
+| `DEEPSEEK_API_KEY` | `deepseek:` | DeepSeek, direct |
+| `MOONSHOT_API_KEY` | `moonshot:` | Moonshot (Kimi), direct |
+| `ZHIPU_API_KEY` | `zhipu:` | Zhipu (GLM), direct |
+| `VOLCENGINE_API_KEY` | `volcengine:` | Volcengine Ark (Doubao), direct |
+| `HF_TOKEN` | Optional for public datasets | HuggingFace access token; required for private or gated datasets if selected |
 
-The `mirobody` target reads its own infrastructure settings from the environment rather than from a
-dataset, because they describe *which deployment you are pointing at* rather than what to ask it:
+### Writing a model name
 
-| Variable | Required | Description |
+| Syntax | Routing |
+|---|---|
+| `gpt-5.4-mini` | OpenAI; if only an OpenRouter key is configured, requests `openai/gpt-5.4-mini` there and logs the route change |
+| `openai/gpt-5-mini` | OpenRouter; the slash is part of its model ID |
+| `openai:gpt-4.1` | Explicit OpenAI endpoint; never automatically rerouted |
+| `google:YOUR_MODEL_ID` | Google SDK; replace the placeholder with an available model ID |
+| `dashscope:YOUR_MODEL_ID` | DashScope endpoint; replace the placeholder with an available model ID |
+
+Supported prefixes: `openrouter`, `dashscope`, `deepseek`, `volcengine`, `zhipu`,
+`moonshot`, `openai`, `google`. The prefix selects an endpoint; it does not guarantee
+that a model exists or that your account can use it. Unknown prefixes raise an error.
+For an unprefixed name, `gpt*` selects OpenAI, `gemini*` selects Google, and other
+names select OpenRouter; `[label]model` selects your configured gateway.
+
+The same syntax works for `--target-model` with `--target-type llm_api`,
+`--eval-model` for the judge, and `--user-model` for an automatic virtual user.
+Changing one role does not change the other two. The Web UI's Model field accepts
+free-form model IDs. These evaluation settings do not change a running mirobody
+server's model configuration.
+
+The separator is a colon before any slash. An OpenRouter ID such as
+`anthropic/claude-sonnet-4.5:batch` keeps its suffix intact. The six OpenAI-compatible
+providers (`openrouter`, `dashscope`, `deepseek`, `volcengine`, `zhipu`, `moonshot`)
+also accept their corresponding `<PROVIDER>_BASE_URL` environment variable.
+`google:` uses the Google SDK's endpoint configuration, not `GOOGLE_BASE_URL`.
+
+### Runtime and gateway settings
+
+| Variable | When needed | Description |
 |---|---|---|
-| `MIROBODY_CONFIG` | Recommended | Absolute path to the deployment's `config.{ENV}.yaml`. Without it, `Config.init()` searches the working directory — this repo, not the deployment — and falls back to built-in defaults |
-| `MIROBODY_BASE_URL` | Optional | Deployment address (default `http://localhost:18080`) |
-| `MIROBODY_TIMEOUT` | Optional | Per-turn timeout in seconds (default 300) |
-| `MIROBODY_PROVIDER` | Optional | Override the deployment agent's LLM provider; empty means use its own default |
+| `HOLYEVAL_GATEWAY_BASE_URL` | `[label]model` | Your OpenAI-compatible gateway URL |
+| `HOLYEVAL_GATEWAY_API_KEY` | Gateway authentication | The gateway's API key |
+| `HOLYEVAL_WEB_PORT` | Optional | Web UI port (default 8000) |
+| `HOLYEVAL_HEALTH_PORT` | Optional | Health-check port (default 8001) |
+| `HOLYEVAL_RELOAD` | Optional | `true` enables uvicorn auto-reload (default false) |
+| `AGENT_LLM_TIMEOUT` | Optional | Framework LLM timeout in seconds (default 840) |
+
+### mirobody deployment settings
+
+These identify the deployment to seed and evaluate. Set them before starting the
+runner or Web UI. If the deployment uses encrypted configuration, provide its
+`CONFIG_ENCRYPTION_KEY` through the evaluation process's environment too.
+
+| Variable | When needed | Description |
+|---|---|---|
+| `MIROBODY_CONFIG` | Recommended for `--target-type mirobody` | Absolute path to the deployment's config file, with database and Redis addresses reachable from this process |
+| `MIROBODY_BASE_URL` | Set to the deployment's URL | Defaults to `http://localhost:18080`; use the actual exposed port |
+| `MIROBODY_TIMEOUT` | Optional | Per-chat-request timeout in seconds; unset uses `AGENT_LLM_TIMEOUT` (default 840). A request may contain many model and tool calls |
+| `MIROBODY_PROVIDER` | Optional | Select a provider configured on the mirobody server; empty uses the deployment's default |
 
 ## Roadmap
 
@@ -518,14 +620,15 @@ uv run python -c "import evaluator.plugin.eval_agent, evaluator.plugin.target_ag
 from evaluator.core.interfaces.abstract_eval_agent import AbstractEvalAgent; \
 print(sorted(AbstractEvalAgent.get_all()))"
 
-# Lint & format
-uv run ruff check .
-uv run ruff format .
+# Lint and formatting checks (install the lint dependency group)
+uv run --group lint ruff check .
+uv run --group lint ruff format --check .
 ```
 
-CI runs the same three, plus a check that every dataset in the repo declares a target and an
-evaluator that actually exist — the failure mode it catches is a dataset that ships referring to a
-plugin nobody can install.
+CI runs unit tests, plugin registration and dataset plugin-reference checks.
+Lint and formatting checks currently report findings without blocking CI, so
+existing findings may appear locally even when CI is green. Review findings in
+the files you change; a successful CI run does not mean the repository is lint-clean.
 
 ## Contributing
 

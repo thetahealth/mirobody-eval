@@ -5,7 +5,7 @@
 </h1>
 
 <p align="center">
-  <strong>一条命令复现任意 LLM 基准。用可插拔的 agent 搭自己的。<br>不用写代码——跟 Claude Code 说话就行。</strong>
+  <strong>五个基准随仓库分发，一条命令复现；虚拟用户、被测系统、判分器都是可换的插件。<br>七条 Claude Code 斜杠命令，从接入一篇论文引导到分析一份报告。</strong>
 </p>
 
 <p align="center">
@@ -52,28 +52,28 @@ mirobody-eval 是 [mirobody](https://github.com/thetahealth/mirobody)（开源�
 
 从一开始就按 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 原生项目来设计——从初始化到把一篇论文里的新基准接进来，每个流程都是一条交互式斜杠命令。你用自然语言描述意图，剩下的交给 Claude Code。**用它或扩展它，你一行代码都不必写。**
 
-### 集成任意基准——只要粘论文链接
+### 从论文到基准 —— `/add-benchmark`
 
 <p align="center">
   <img src="docs/screenshots/holyeval_add_benchmark.gif" alt="Add Benchmark Demo" width="80%">
 </p>
 
-> **从论文到评分报告，一次对话之内。** 粘一个链接，Claude Code 读论文、写转换器、生成数据集、做校验——完事。没有样板代码，不用手工建文件。
+> 粘一个论文链接，`/add-benchmark` 引导 Claude Code 读论文、写转换器、生成数据集，最后跑一份样本、**拿论文公布的数字校验转换是否忠实**。产物只落在数据和插件目录，框架核心不被触碰。
 
-### 一条命令跑任意基准
+### 同一条命令跑全部五个基准
 
 <p align="center">
   <img src="docs/screenshots/holyeval_run_benchmark.gif" alt="Run Benchmark Demo" width="80%">
 </p>
 
 ```bash
-# 试一下 —— 带 --limit 3 时每条命令花费 < $0.05
+# 先跑少量用例；费用和耗时取决于模型及基准
 uv run python -m benchmark.basic_runner healthbench sample --target-model gpt-5.4-mini --limit 3
 uv run python -m benchmark.basic_runner medcalc sample --target-model gpt-5.4-mini --limit 3
 uv run python -m benchmark.basic_runner virtual_user round1 --target-type llm_api --target-model gpt-5.4-mini --limit 3
 
 # ESLBench 需要先准备数据（见下面的快速开始）
-uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-model gpt-5.4-mini --limit 3
+uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-type llm_api --target-model gpt-5.4-mini --limit 3
 
 # 想跑全量？去掉 --limit
 ```
@@ -82,13 +82,14 @@ uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-mode
 
 | | |
 |---|---|
-| **论文 → 基准，一次对话** | 粘一个论文链接，Claude Code 读它、写转换器、生成数据集、做校验——完事 |
-| **一条命令复现** | 任何已集成的基准，永远可以用一条 CLI 命令复现 |
-| **可插拔架构** | 三类 agent（TestAgent、TargetAgent、EvalAgent）——每一类都用一个类就能扩展 |
-| **多轮对话** | 模拟真实的用户会话，不只是单轮问答 |
-| **批量执行** | 并发跑、实时进度、可取消、断点续跑 |
-| **Web UI** | 可视化面板：发起评测、看报告、浏览数据集 |
-| **AI 原生** | 为 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 而建——安装、运行、扩展全用自然语言，零样板 |
+| **论文 → 基准** | 粘一个论文链接，`/add-benchmark` 读论文、写转换器、生成数据集，最后拿论文公布的分数校验转换是否忠实 |
+| **一条命令复现** | 随附基准都走同一条 `basic_runner` 命令；报告带批次号和 sha256 校验和，分数能指回它来自哪一期发布 |
+| **判不成分就说判不成** | 超时、断连、判分器故障记 `error`，不算进平均分；未判成数和「已评分/总数」印在每份汇总里——假零分和虚高分都进不来 |
+| **可插拔架构** | 虚拟用户、被测系统、判分器各是一个插件类；文件落进插件目录即自动注册，框架核心不用改 |
+| **评测单位是会话** | TestAgent ↔ TargetAgent 多轮对话直到结束条件，判分器拿到完整轨迹，不只是单轮问答 |
+| **批量执行** | 并发、可取消；中断留下检查点，`--resume` 加载后跳过已完成的用例接着跑 |
+| **Web UI** | 发起评测、SSE 进度、逐用例报告——与 CLI 汇聚到同一个执行入口 `do_single_test()` |
+| **AI 原生** | 七条引导式斜杠命令，从 `/quick-start` 到 `/eslbench-report-analysis`，装环境到读报告全程有引导 |
 
 ## 快速开始
 
@@ -99,40 +100,78 @@ uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-mode
 ```bash
 git clone https://github.com/thetahealth/mirobody-eval.git && cd mirobody-eval
 uv sync
-cp .env.example .env                    # 填入你的 OPENAI_API_KEY 或 GOOGLE_API_KEY
+cp .env.example .env                    # 编辑 .env，填入所用服务商的真实 key
 
-# 跑第一个基准（< $0.02）
+# 配好 OPENAI_API_KEY 或 OPENROUTER_API_KEY 后运行
 uv run python -m benchmark.basic_runner healthbench sample --target-model gpt-5.4-mini --limit 2
 
 # 启动 Web UI
 uv run python -m web                    # http://localhost:8000
 ```
 
-> **前置条件：** Python 3.11+、[uv](https://docs.astral.sh/uv/)、至少一个 LLM API key（OpenAI 或 Google Gemini）。
+> **前置条件：** Python 3.11+、[uv](https://docs.astral.sh/uv/)、至少一个 LLM API key。
+> 上面的示例中，被测模型和判分模型都属于 OpenAI。可以配置 `OPENAI_API_KEY`，
+> 或只配置 `OPENROUTER_API_KEY`、不设置 `OPENAI_API_KEY`，让这些模型 ID 通过
+> OpenRouter 调用。账号需有对应模型的访问权限。这配置的是评测进程；mirobody
+> 部署自身的对话模型和 embedding 仍需单独配置。
 >
-> **ESLBench 数据准备：** ESLBench 需要先从 HuggingFace 下载数据——跑 `uv run python -m generator.eslbench.prepare_data`（走 Web UI 时会自动做）。其余基准的数据随仓库自带。
+> **ESLBench 数据准备：** 评测前运行 `uv run python -m generator.eslbench.prepare_data`
+>（Web UI 也会在后台启动准备，请等完成后再跑）。它会检查 manifest 中的全部批次，
+> 下载缺失或有变更的批次，包括用户数据和题库，再生成 DuckDB 文件。它不是只下载
+> 一个用户，首次准备可能占用较多磁盘和时间。其他基准的题目文件随仓库提供。
+
+如果只有 Google 或 DashScope 的 key，还需要为调用 LLM 的角色分别指定模型。
+先在 `.env` 配好对应的 key，再把下面的 `YOUR_MODEL_ID` 换成账号可用的模型 ID：
+
+```bash
+MODEL=google:YOUR_MODEL_ID              # 或 dashscope:YOUR_MODEL_ID
+uv run python -m benchmark.basic_runner healthbench sample \
+    --target-type llm_api --target-model "$MODEL" --eval-model "$MODEL" --limit 2
+```
+
+运行 `virtual_user` 时还需加 `--user-model "$MODEL"`。仅设置服务商的 key 不会替换
+其他角色原有的 OpenAI 默认模型。所有可用前缀见[配置](#配置)。
 
 ## 评测你自己的 mirobody 部署
 
-这是 mirobody-eval 存在的理由。刚装好的 [mirobody](https://github.com/thetahealth/mirobody) 数据库是空的，于是没什么可问它，也无法判断你做的改动到底有没有帮助。三条命令同时解决这两件事：
+先准备一个运行中的 [mirobody](https://github.com/thetahealth/mirobody) 部署，并确保
+评测进程能访问它的 Postgres 和 Redis。部署已有的演示数据可能属于其他用户，
+评测前仍需灌入所选题目对应的用户。
+
+在 mirobody-eval 仓库目录中，按快速开始配置评测用的 LLM key。mirobody 部署自身
+需要可用的对话和 embedding provider，评测进程需使用同一部署的 JWT 配置。
+如果配置文件经过加密，seeder 和 runner 也需要该部署的 `CONFIG_ENCRYPTION_KEY`。
+先安装可选依赖，再灌数据（此依赖要求 Python 3.12+）：
 
 ```bash
-# 1. 从 HuggingFace 拉一个合成用户的五年轨迹（约 20 MB）
+# 1. 安装引擎集成依赖
+uv sync --extra mirobody --python 3.12
+
+# 2. 准备全部缺失或有变更的 ESLBench 批次，不只是一个用户
 uv run python -m generator.eslbench.prepare_data
 
-# 2. 灌进你那个部署的 Postgres，并让指标可被检索
-export MIROBODY_CONFIG=/绝对路径/到/你的/mirobody/config.localdb.yaml   # 指明是哪个部署
+# 3. 指向自己的部署；把路径和地址替换为实际配置
+export MIROBODY_CONFIG=/绝对路径/到/你的/mirobody/config.localdb.yaml
+export MIROBODY_BASE_URL=http://localhost:18080
+
+# 4. 灌入接下来要评测的用户
 uv run python -m generator.eslbench.seed_mirobody --users user5086@demo
 
-# 3. 用 ESL-Bench 给你的部署打分
-uv run python -m benchmark.basic_runner eslbench sample200-20260430 --target-type mirobody --limit 20
+# 5. 首次只跑该用户的指定题目；--limit 本身不会按用户筛选
+uv run python -m benchmark.basic_runner eslbench sample200-20260430 \
+    --target-type mirobody \
+    --ids user5086_AT_demo_Q001,user5086_AT_demo_Q087,user5086_AT_demo_Q067 -p 1
 ```
 
-现在你有了 ESL-Bench 五个推理维度各自的分数——Lookup、Trend、Comparison、Anomaly、Explanation。换个模型、切 agent 类型、改个 prompt、加个工具，再跑一遍，看哪个维度动了。把 `--target-type llm_api` 指向同一批题，就得到一个纯检索的基线用来对比。
+HTTP 地址以部署实际暴露的地址为准；如果端口是 18060，就填
+`http://localhost:18060`。配置中的 Docker 容器内数据库地址未必能从宿主机访问。
+灌入完成后 seeder 会检查指标的可检索性，有缺失向量会先报错。
 
-> **第 2 步的前置条件：** `uv sync --extra mirobody --python 3.12`（引擎要求 3.12+，而本项目自身跑在 3.11 上，所以这个 extra 在 3.11 上什么都不装），并且配置要指向你要灌的那个部署，外加一个能用的 embedding provider key。灌完之后 seed 会回头校验每个指标是不是真的能被 agent 检索到，**有问题就直接报错**——否则你会得到一个看起来满的数据库，而 agent 回答「我没有你的健康数据」，日志里还看不出原因。
->
-> **第 3 步的前置条件：** 那个部署的 HTTP 服务在跑（`MIROBODY_BASE_URL`，默认 `http://localhost:18080`）。
+这三题用于确认连接和判分流程，不覆盖 ESL-Bench 的全部五个维度，也不能作为完整
+基准成绩。扩大评测前，请先灌入所选题目涉及的全部用户。要与使用检索工具的纯模型
+对比，保留相同数据集和 ID，改用 `--target-type llm_api` 并填写 `--target-model`。
+`--target-type mirobody` 背后的模型由部署自身配置。要从 Web UI 发起评测，
+在上述已配置的终端中启动 `uv run python -m web`，再选相同的题目 ID。
 
 ### 文件上传演示
 
@@ -142,6 +181,9 @@ uv run python -m benchmark.basic_runner eslbench sample200-20260430 --target-typ
 uv run python -m generator.eslbench.seed_mirobody --users user5086@demo --hold-out-exams 1
 uv run python -m generator.eslbench.labreport     --users user5086@demo -o samples/lab_report.pdf
 ```
+
+这个演示会从灌入的历史中留出最新体检。之后若要评测依赖完整历史的题目，
+请去掉 `--hold-out-exams` 再灌入一次。
 
 `user5086@demo` 是一个生成出来的 58 岁 2 型糖尿病人，血脂在四次面板里先改善、后回落。每个数值都是合成的；PDF 首页就写着这一点。
 
@@ -163,6 +205,7 @@ mirobody-eval 的设计目标是完全通过 [Claude Code](https://docs.anthropi
 | **加一个自定义评测器** | `/add-eval-agent` | 生成配置模型 + 插件实现 + 注册。CLI 和 Web UI 里立即可用 |
 | **加一个被测系统** | `/add-target-agent` | 为新的被测系统生成连接处理、消息处理和清理逻辑 |
 | **审查架构** | `/review-architecture` | 检查 GitOps 合规、插件隔离、共享层复用，报告违规并给修法 |
+| **分析跑分报告** | `/eslbench-report-analysis` | 按难度维度拆分数、方法间对比、看失败率与每题耗时/成本 |
 
 ### 工作流示例
 
@@ -221,6 +264,8 @@ mirobody-eval 的设计目标是完全通过 [Claude Code](https://docs.anthropi
 ## Health Memory Arena —— 在线评测平台
 
 [Health Memory Arena](http://healthmemoryarena.ai)（HMA）是由 mirobody-eval 驱动的公开评测平台。它托管着 ESL-Bench 排行榜，健康 AI agent 在结构化纵向推理任务上同台竞争。
+
+> **现状说明**：凡是答案已发布的批次，本仓库能让你复现榜单上的分数——数据集拉取、跑分、报告里带批次号和校验和，这条链是完整的。按滚动发布政策，**最新一期在下一期上线前不公开答案**，那一期的分数在此之前无法在本地判分。此外，**把你自己的题库发布到 HuggingFace、以及把成绩提交上榜，这两步的工具还没有开源化**。想接入的话先开一个 issue，我们按需推进。
 
 <table>
 <tr>
@@ -323,15 +368,15 @@ ESLBench（[arXiv:2604.02834](https://arxiv.org/abs/2604.02834)）评测纵向�
 # 首次：准备数据（走 Web UI 会自动做，CLI 需手动）
 uv run python -m generator.eslbench.prepare_data
 
-# 快速验证：3 条用例确认环境没问题（< $0.05）
-uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-model gpt-5.4-mini --limit 3
+# 快速验证：先跑 3 条用例检查环境
+uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-type llm_api --target-model gpt-5.4-mini --limit 3
 
 # 抽样数据集
-uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-model gpt-5.4-mini      # 50 条
-uv run python -m benchmark.basic_runner eslbench sample500-20260331 --target-model gpt-5.4-mini -p 5 # 500 条
+uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-type llm_api --target-model gpt-5.4-mini      # 50 条
+uv run python -m benchmark.basic_runner eslbench sample500-20260331 --target-type llm_api --target-model gpt-5.4-mini -p 5 # 500 条
 
 # 全量（4500 条 —— API 成本可观，跑之前先想清楚）
-uv run python -m benchmark.basic_runner eslbench full-20260331 --target-model gpt-5.4-mini -p 5
+uv run python -m benchmark.basic_runner eslbench full-20260331 --target-type llm_api --target-model gpt-5.4-mini -p 5
 ```
 
 被测的 LLM 会拿到一组工具（`eslbench/retrieve`）：读 JSON 文件、查 DuckDB、查指标——它必须用这些工具在用户的健康数据里找答案。
@@ -445,32 +490,83 @@ uv run python -m benchmark.basic_runner virtual_user round1 \
     --eval-model anthropic/claude-sonnet-4.6
 ```
 
-判分器只在 `text` 和 `behavioral` 两种答案类型上出场。`numeric_value`、`boolean`、`list` 是纯规则判分，压根不需要 key——ESL-Bench 的 `sample200-20260430` 里 200 条有 106 条属于这一类。如果配了判分器但它跑不起来，对应用例会被记为 `error` 而不是给个分数：判分器没跑，就等于对被测系统什么都没说，把它平均进去会被读成一个结果。
+对于 ESL-Bench 的 `kg_qa` 判分器，`text` 和 `behavioral` 使用 LLM 判分；
+`numeric_value`、`boolean` 和 `list` 使用规则。规则判分不需要判分用的 key，
+但被测系统回答问题时仍可能需要调用模型。
+
+超时、取消和执行异常记录为 `error`。平均分只统计 `pass`、`fail`、`scored` 用例。
+CLI 汇总会显示错误数量和“已评分/总数”；没有任何用例判成时，平均分显示为 `—`。
+比较成绩时必须同时看完成覆盖率：只完成少数题的高分不能代表完整题库成绩。
+保存的 JSON 在没有成绩时仍保留 `avg_score: 0.0`，读取报告时需结合 `error_count`
+和用例总数判断。其他判分器可能有各自的失败处理方式。
 
 ## 配置
 
-环境变量（写在 `.env` 里）：
+在 `.env` 中配置被测模型、判分器和虚拟用户所用服务商的 key。随附默认配置使用
+OpenAI 模型，可通过 OpenAI 或 OpenRouter 调用；使用其他服务商时，请分别指定
+每个 LLM 角色的模型。
 
-| 变量 | 是否必需 | 说明 |
+| 变量 | 何时需要 | 说明 |
 |---|---|---|
-| `OPENAI_API_KEY` | 至少配一个 | OpenAI API key |
-| `GOOGLE_API_KEY` | 至少配一个 | Google Gemini API key |
-| `HF_TOKEN` | ESLBench 需要 | 下载基准数据用的 HuggingFace token |
-| `OPENROUTER_API_KEY` | 可选 | OpenRouter 多 provider 接入 |
-| `HOLYEVAL_GATEWAY_BASE_URL` | 可选 | 你自己的 OpenAI 兼容网关（vLLM / LiteLLM / 自建中转）。仅当模型名写成 `[label]model` 时需要 |
-| `HOLYEVAL_GATEWAY_API_KEY` | 可选 | 那个网关的 API key |
-| `HOLYEVAL_WEB_PORT` | 可选 | Web UI 端口（默认 8000） |
-| `HOLYEVAL_HEALTH_PORT` | 可选 | 健康检查端口（默认 8001） |
-| `HOLYEVAL_RELOAD` | 可选 | `true` 开启 uvicorn 自动重载（默认 false） |
+| `OPENAI_API_KEY` | 使用 OpenAI 模型 | 直连 OpenAI API |
+| `OPENROUTER_API_KEY` | 使用 OpenRouter 模型 | 未设置 `OPENAI_API_KEY` 时，也用于不带前缀的 `gpt*` 模型名 |
+| `GOOGLE_API_KEY` / `GEMINI_API_KEY` | 使用 Google 模型 | 选择 `google:` 或 `gemini*` 模型；Vertex AI 也可使用应用默认凭据 |
+| `DASHSCOPE_API_KEY` | 使用 `dashscope:` | 阿里云百炼 |
+| `DEEPSEEK_API_KEY` | 使用 `deepseek:` | DeepSeek 官方直连 |
+| `MOONSHOT_API_KEY` | 使用 `moonshot:` | 月之暗面（Kimi）官方直连 |
+| `ZHIPU_API_KEY` | 使用 `zhipu:` | 智谱（GLM）官方直连 |
+| `VOLCENGINE_API_KEY` | 使用 `volcengine:` | 火山方舟（豆包）官方直连 |
+| `HF_TOKEN` | 公开数据集可选 | HuggingFace token；若选择私有或受限数据集，需要相应访问权限 |
 
-`mirobody` 这个被测目标的基础设施参数从环境变量读、不走数据集，因为它们描述的是*你指向哪个部署*，而不是要问它什么：
+### 模型名怎么写
 
-| 变量 | 是否必需 | 说明 |
+| 写法 | 路由 |
+|---|---|
+| `gpt-5.4-mini` | OpenAI；若只配置了 OpenRouter key，则通过它请求 `openai/gpt-5.4-mini`，并记录改道日志 |
+| `openai/gpt-5-mini` | OpenRouter，斜杠属于它的模型 ID |
+| `openai:gpt-4.1` | 显式指定 OpenAI 官方端点，不会自动改道 |
+| `google:YOUR_MODEL_ID` | Google SDK；请把占位符替换为可用模型 ID |
+| `dashscope:YOUR_MODEL_ID` | 百炼端点；请把占位符替换为可用模型 ID |
+
+支持的前缀：`openrouter`、`dashscope`、`deepseek`、`volcengine`、`zhipu`、
+`moonshot`、`openai`、`google`。前缀只负责选择端点，不保证模型存在或账号有访问
+权限；不认识的前缀会报错。不带前缀时，`gpt*` 走 OpenAI，`gemini*` 走 Google，
+其他模型名走 OpenRouter；`[label]model` 走配置的自建网关。
+
+这套写法同时适用于 `--target-type llm_api` 的 `--target-model`、判分器的
+`--eval-model`，以及自动虚拟用户的 `--user-model`。改其中一个不会改变另外两个。
+Web UI 的 Model 输入框支持自由填写模型 ID。这些评测设置不会修改正在运行的
+mirobody 服务端的模型配置。
+
+分隔符是斜杠之前的冒号。OpenRouter 的 `anthropic/claude-sonnet-4.5:batch` 等
+模型 ID 会保留原后缀。六个 OpenAI 兼容服务商（`openrouter`、`dashscope`、
+`deepseek`、`volcengine`、`zhipu`、`moonshot`）还支持对应的
+`<PROVIDER>_BASE_URL` 环境变量。`google:` 使用 Google SDK 的端点配置，
+不读取 `GOOGLE_BASE_URL`。
+
+### 运行和网关配置
+
+| 变量 | 何时需要 | 说明 |
 |---|---|---|
-| `MIROBODY_CONFIG` | 建议配 | 那个部署的 `config.{ENV}.yaml` 绝对路径。不配的话 `Config.init()` 会在当前工作目录里找——那是本仓库、不是那个部署——然后退回内置默认值 |
-| `MIROBODY_BASE_URL` | 可选 | 部署地址（默认 `http://localhost:18080`） |
-| `MIROBODY_TIMEOUT` | 可选 | 单轮超时秒数（默认 300） |
-| `MIROBODY_PROVIDER` | 可选 | 覆盖那个部署 agent 的 LLM provider；留空则用它自己的默认值 |
+| `HOLYEVAL_GATEWAY_BASE_URL` | 使用 `[label]model` | 自建 OpenAI 兼容网关地址 |
+| `HOLYEVAL_GATEWAY_API_KEY` | 网关鉴权 | 网关的 API key |
+| `HOLYEVAL_WEB_PORT` | 可选 | Web UI 端口，默认 8000 |
+| `HOLYEVAL_HEALTH_PORT` | 可选 | 健康检查端口，默认 8001 |
+| `HOLYEVAL_RELOAD` | 可选 | `true` 开启 uvicorn 自动重载，默认 false |
+| `AGENT_LLM_TIMEOUT` | 可选 | 框架 LLM 超时秒数，默认 840 |
+
+### mirobody 部署配置
+
+这些参数用于指定要灌入数据并评测的部署，请在启动 runner 或 Web UI 前设置。
+如果部署使用加密配置，还需通过评测进程的环境变量提供该部署的
+`CONFIG_ENCRYPTION_KEY`。
+
+| 变量 | 何时需要 | 说明 |
+|---|---|---|
+| `MIROBODY_CONFIG` | 使用 `--target-type mirobody` 时建议配置 | 部署配置文件的绝对路径，其中的数据库和 Redis 地址需能从当前进程访问 |
+| `MIROBODY_BASE_URL` | 填部署的实际地址 | 默认 `http://localhost:18080`，请使用实际暴露的端口 |
+| `MIROBODY_TIMEOUT` | 可选 | 单次对话请求的超时秒数；不配则用 `AGENT_LLM_TIMEOUT`，默认 840。一次请求可能包含多次模型和工具调用 |
+| `MIROBODY_PROVIDER` | 可选 | 选择 mirobody 服务端已配置的 provider；留空使用部署默认值 |
 
 ## 路线图
 
@@ -493,12 +589,14 @@ uv run python -c "import evaluator.plugin.eval_agent, evaluator.plugin.target_ag
 from evaluator.core.interfaces.abstract_eval_agent import AbstractEvalAgent; \
 print(sorted(AbstractEvalAgent.get_all()))"
 
-# Lint 与格式化
-uv run ruff check .
-uv run ruff format .
+# Lint 与格式检查（安装 lint 依赖组）
+uv run --group lint ruff check .
+uv run --group lint ruff format --check .
 ```
 
-CI 跑的就是上面这三样，外加一项检查：仓库里每个数据集声明的被测目标和评测器都真的存在——它要拦的是一个数据集发布出去、却引用了没人装得上的插件。
+CI 会运行单元测试、插件注册和数据集插件引用检查。Lint 和格式检查目前只报告问题，
+不会阻断 CI，因此即使 CI 通过，本地仍可能看到既有检查项。请检查自己改动文件的
+检查结果；CI 通过不代表整个仓库已无 lint 问题。
 
 ## 参与贡献
 
