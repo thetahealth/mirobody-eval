@@ -33,7 +33,7 @@ from evaluator.plugin.target_agent.hippo_rag_api_target_agent import (
 )
 from evaluator.utils.evermemos_client import EverMemOSClient
 from evaluator.utils.llm import BasicMessage, do_execute
-from evaluator.utils.thetagen_chunker import email_to_dir
+from evaluator.utils.user_data_chunker import email_to_dir
 
 logger = logging.getLogger(__name__)
 

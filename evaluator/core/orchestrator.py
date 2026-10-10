@@ -14,14 +14,14 @@
 插件注册（基于 __init_subclass__）:
   class AutoTestAgent(AbstractTestAgent, name="auto"):       # LLM 驱动
   class ManualTestAgent(AbstractTestAgent, name="manual"):   # 脚本驱动
-  class ThetaApiTargetAgent(AbstractTargetAgent, name="theta_api"):  # Theta HTTP API
   class LlmApiTargetAgent(AbstractTargetAgent, name="llm_api"):    # 基于 do_execute
+  class HermesTargetAgent(AbstractTargetAgent, name="hermes"):     # 外部 HTTP 服务
   class SemanticEvalAgent(AbstractEvalAgent, name="semantic"):
 
 插件导入（触发注册）:
   import evaluator.plugin.test_agent    # AutoTestAgent / ManualTestAgent
-  import evaluator.plugin.target_agent  # ThetaApiTargetAgent / LlmApiTargetAgent
-  import evaluator.plugin.eval_agent    # SemanticEvalAgent / IndicatorEvalAgent / KeywordEvalAgent
+  import evaluator.plugin.target_agent  # LlmApiTargetAgent / HermesTargetAgent / ...
+  import evaluator.plugin.eval_agent    # SemanticEvalAgent / RubricEvalAgent / ...
 
 设计原则:
 - core 不依赖任何具体实现，仅依赖抽象接口
@@ -239,8 +239,10 @@ async def do_single_test(
       4. 汇总     — 封装 TestResult 返回
 
     异常处理:
-      任何阶段抛出异常，均捕获并返回 result="fail" 的 TestResult，
-      异常信息写入 feedback 字段，确保批量执行不会因单用例失败而中断。
+      任何阶段抛出异常，均捕获并返回 result="error" 的 TestResult，异常类型与
+      信息写入 feedback 和 trace.eval_detail，确保批量执行不会因单用例中断。
+      是 error 而不是 fail —— fail 的含义是「判过分、分低」，而抛异常意味着
+      没判成，两者的处置完全不同。error 不计入 pass/fail，也不计入 avg_score。
 
     Args:
         test_case: 测试用例
@@ -395,7 +397,7 @@ async def do_single_test(
         if hasattr(target_agent, "cost") and hasattr(target_agent, "model"):
             if target_agent.cost["total_tokens"] > 0:
                 dialogue_cost.target = {target_agent.model: target_agent.cost}
-        # Attach raw cost detail if target agent provides it (e.g. theta_smart_api with breakdown)
+        # Attach raw cost detail if target agent provides it (e.g. target agents that report a per-call cost breakdown)
         if hasattr(target_agent, "cost_detail") and target_agent.cost_detail:
             dialogue_cost.target_detail = target_agent.cost_detail
 
@@ -429,8 +431,24 @@ async def do_single_test(
         _update_ctx(CaseStatus.CANCELLED, result=result, error="用例被取消")
         return result
 
-    except Exception:
-        # 任何异常均捕获，返回 fail 结果，不中断批量执行
+    except Exception as e:
+        # 任何异常均捕获，不中断批量执行 —— 但结果是 error，不是 fail。
+        #
+        # `fail` 的定义（见 schema.EvalResult）是「被判过分、分低于 threshold」。
+        # 异常意味着压根没判成,两者不是一回事。写成 fail 会把「没跑完」和
+        # 「答错了」混进同一栏,而它们的处置完全不同 —— 前者要调预算或修部署,
+        # 后者才是被测系统的能力问题。
+        #
+        # 具体踩到的:跨全量统计的题在超时预算不足时抛 TimeoutError,报告里显示
+        # `fail 0.00`,与真答错无法区分;而同一道题预算够时得 0.89。一个随评测方
+        # 配置变化的数不能算分数。
+        #
+        # 不按异常类型分流:要维护一张异常清单是过度设计,而「没判成分」这个
+        # 事实与异常类型无关。类型落 eval_detail,超时/连接失败/本框架自身的
+        # bug 照样分得开。
+        #
+        # 注意此处 `_update_ctx` 一直传的就是 `CaseStatus.ERROR` —— 内部状态机
+        # 早就认定这是 error,只有 EvalResult 写着 fail。这次是把两者对齐。
         end_time = datetime.now()
         elapsed = (end_time - start_time).total_seconds()
         error_detail = traceback.format_exc()
@@ -441,9 +459,16 @@ async def do_single_test(
             id=case_id,
             **_meta,
             eval=EvalResult(
-                result="fail",
+                result="error",
                 score=0.0,
-                feedback=f"测试执行异常:\n{error_detail}",
+                feedback=f"测试执行异常 [{type(e).__name__}]:\n{error_detail}",
+                trace=EvalTrace(
+                    eval_detail={
+                        "exception_type": type(e).__name__,
+                        "exception": str(e),
+                        "elapsed_seconds": round(elapsed, 1),
+                    }
+                ),
             ),
             cost=TestCost(),
             start=start_time,
@@ -464,12 +489,22 @@ def _make_cancelled_result(
     end_time: datetime | None = None,
     **meta: Any,
 ) -> TestResult:
-    """创建取消用例的 TestResult"""
+    """创建取消用例的 TestResult
+
+    `error` 而非 `fail`:取消的用例没被判分,和超时同理。留成 fail 会让「中途
+    取消一个批次」把一串假 0 分算进平均分 —— 一份跑了一半就停的报告,应当报
+    实际跑完那些的平均分 + 一个显式的 error 计数,而不是被没跑的部分拉低。
+    """
     now = datetime.now()
     return TestResult(
         id=case_id,
         **meta,
-        eval=EvalResult(result="fail", score=0.0, feedback="用例被取消"),
+        eval=EvalResult(
+            result="error",
+            score=0.0,
+            feedback="用例被取消",
+            trace=EvalTrace(eval_detail={"exception_type": "Cancelled"}),
+        ),
         cost=TestCost(),
         start=start_time or now,
         end=end_time or now,
@@ -766,13 +801,21 @@ async def do_eval_only(
         logger.info("[%s] %s", case_id, _SEPARATOR_HEAVY)
         return result
 
-    except Exception:
+    except Exception as e:
+        # 同 do_single_test 的兜底:没判成分就不是 fail。见那里的完整说明。
         end_time = datetime.now()
         error_detail = traceback.format_exc()
         logger.error("[%s] Eval-Only 异常:\n%s", case_id, error_detail)
         return TestResult(
             id=case_id, **_meta,
-            eval=EvalResult(result="fail", score=0.0, feedback=f"评测执行异常:\n{error_detail}"),
+            eval=EvalResult(
+                result="error",
+                score=0.0,
+                feedback=f"评测执行异常 [{type(e).__name__}]:\n{error_detail}",
+                trace=EvalTrace(
+                    eval_detail={"exception_type": type(e).__name__, "exception": str(e)}
+                ),
+            ),
             cost=TestCost(), start=start_time, end=end_time,
         )
 
@@ -786,7 +829,7 @@ async def do_batch_eval(
 
     Args:
         items:           [(TestCase, memory_list)] 或 [(TestCase, memory_list, session_info)] 列表
-                         session_info 用于让 judge 区分 theta-target vs 基模（is_theta_target 标志）;
+                         session_info 用于让 judge 区分「能读到用户数据的 target」与基模（has_user_data 标志）;
                          省略时一律按基模评测。
         max_concurrency: 最大并发数，0 表示不限制
         on_progress:     每条评测完成时的回调（用于实时进度跟踪）

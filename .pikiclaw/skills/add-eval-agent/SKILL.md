@@ -17,7 +17,7 @@ Create a new EvalAgent plugin with all required boilerplate: Pydantic config, im
 | 文件 | 操作 |
 |------|------|
 | `evaluator/plugin/eval_agent/<name>_eval_agent.py` | 创建新文件（plugin 实现） |
-| `evaluator/plugin/eval_agent/__init__.py` | **仅追加**: 添加 import + `__all__` 条目 + docstring 映射。不得删除/修改已有内容 |
+| `evaluator/plugin/eval_agent/__init__.py` | **不要改**：pkgutil 按 `_eval_agent.py` 后缀自动导入，无 import 清单也无 `__all__` |
 
 ### 🟢 Schema — 无需修改
 
@@ -72,7 +72,7 @@ Ask the user (via AskUserQuestion) for the following if not provided in $ARGUMEN
 
 Before generating code, verify:
 
-- [ ] Name is unique — must NOT conflict with existing registered names. Check dynamically by reading `evaluator/plugin/eval_agent/__init__.py`.
+- [ ] Name is unique — check with `python -c "import evaluator.plugin.eval_agent; from evaluator.core.interfaces.abstract_eval_agent import AbstractEvalAgent; print(sorted(AbstractEvalAgent.get_all()))"`
 - [ ] Name is valid snake_case identifier (lowercase, underscores only, no leading digits)
 - [ ] Config field names don't shadow Pydantic reserved names
 
@@ -149,30 +149,32 @@ class <PascalCase>EvalAgent(AbstractEvalAgent, name="<name>", params_model=<NewE
 
 Key patterns to follow (from existing implementations):
 - **LLM-based evaluator**: See `semantic_eval_agent.py` (SemanticEvalAgent) — uses `do_execute()`, tracks cost via `self._cost`, exposes `self.model` and `self.cost` property
-- **Deterministic evaluator**: See `preset_answer_eval_agent.py` — no LLM, no cost tracking, pure logic
+- **Deterministic evaluator**: See `record_retrieval_eval_agent.py` — no LLM, no cost tracking, pure logic
 - Extract conversation from `memory_list` (each entry has `.test_reaction` for user action and `.target_response` for AI response)
 - Static context available via `self.history`, `self.user_info`, `self.case_id`
 - Return `EvalResult(result="pass"|"fail", score=0.0~1.0, feedback="...", trace=...)`
 
 ### Step 5: Register Plugin
 
-Edit `evaluator/plugin/eval_agent/__init__.py`:
-- Add import for the new class
-- Add class name to `__all__`
-- Update the module docstring to include the new registration mapping
+**没有手工注册这一步。** `evaluator/plugin/eval_agent/__init__.py` 用 `pkgutil` 遍历本包，
+自动 import 所有文件名以 `_eval_agent.py` 结尾的模块，从而触发 `__init_subclass__` 注册。
+该文件里既没有 import 清单也没有 `__all__` —— **文件名即注册**，类上传 `params_model=` 即可。
+
+> 该处的 `except ImportError: pass` 会吞掉依赖缺失，所以插件没出现时直接单独 import
+> 该模块看真实报错。模块级的 SyntaxError / NameError 不会被吞，会炸掉整个包导入。
 
 ### Step 6: Verify
 
 Run the following to verify:
 ```bash
 # 插件注册检查
-uv run python -c "import evaluator.plugin.eval_agent; from evaluator.core.interfaces.abstract_eval_agent import AbstractEvalAgent; print(AbstractEvalAgent.get_all())"
+uv run python -c "import evaluator.plugin.eval_agent; from evaluator.core.interfaces.abstract_eval_agent import AbstractEvalAgent; print(sorted(AbstractEvalAgent.get_all()))"
 
 # Web UI schema 自动发现检查
 uv run python -c "from evaluator.utils.agent_inspector import list_eval_agents; print([(a.name, list(a.config_schema.get('properties', {}).keys())) for a in list_eval_agents()])"
 
 # Lint
-ruff check evaluator/core/schema.py evaluator/plugin/eval_agent/
+ruff check evaluator/plugin/eval_agent/
 ruff format evaluator/core/schema.py evaluator/plugin/eval_agent/
 ```
 
@@ -194,7 +196,7 @@ ruff format evaluator/core/schema.py evaluator/plugin/eval_agent/
 新 plugin 默认使用灰色图标和空特性标签。若需自定义 Web UI 展示，在 plugin 类上声明 `_display_meta`:
 
 ```python
-class <PascalCase>EvalAgent(AbstractEvalAgent, name="<name>"):
+class <PascalCase>EvalAgent(AbstractEvalAgent, name="<name>", params_model=<PascalCase>EvalInfo):
     _display_meta = {
         "icon": "M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z",  # heroicons SVG path
         "color": "#8b5cf6",        # CSS 颜色值
@@ -214,17 +216,25 @@ class <PascalCase>EvalAgent(AbstractEvalAgent, name="<name>"):
 |-----------|--------|------|
 | LLM 单次调用 (semantic) | 0.010 | 1-2 次 LLM 调用 |
 | LLM 多次调用 (healthbench) | 0.035 | N 条 rubric × 独立 LLM grading |
-| 纯规则 (keyword/preset_answer) | 0 | 无 LLM 调用 |
+| 纯规则 (record_retrieval) | 0 | 无 LLM 调用 |
 
 `_display_meta` 和 `_cost_meta` 中的字段均为可选，未指定的使用默认值。
 
-## Reference: Existing EvalAgent Plugins
+## Reference: EvalAgent Plugins Shipped with the Framework
 
 | Name | Config | File | Type |
 |------|--------|------|------|
 | `semantic` | `SemanticEvalInfo` | `semantic_eval_agent.py` | LLM-based |
-| `indicator` | `IndicatorEvalInfo` | `indicator_eval_agent.py` | LLM + API |
-| `keyword` | `KeywordEvalInfo` | `keyword_eval_agent.py` | Deterministic |
-| `preset_answer` | `PresetAnswerEvalInfo` | `preset_answer_eval_agent.py` | Deterministic |
+| `rubric` | `RubricEvalInfo` | `rubric_eval_agent.py` | LLM + deterministic (criteria / signals / latency) |
 | `healthbench` | `HealthBenchEvalInfo` | `healthbench_eval_agent.py` | LLM-based (rubric) |
 | `medcalc` | `MedCalcEvalInfo` | `medcalc_eval_agent.py` | LLM + deterministic |
+| `kg_qa` | `KgQaEvalInfo` | `kg_qa_eval_agent.py` | LLM + deterministic (numeric tolerance / stepwise) |
+| `record_retrieval` | `RecordRetrievalEvalInfo` | `record_retrieval_eval_agent.py` | Deterministic (per-turn checkpoints) |
+| `dialogue_quality` | `DialogueQualityEvalInfo` | `dialogue_quality_eval_agent.py` | LLM-based (multi-dimension) |
+| `engagement` | `EngagementEvalInfo` | `engagement_eval_agent.py` | LLM-based |
+
+当前实际注册了什么以这条为准，别以表为准：
+
+```bash
+python -c "import evaluator.plugin.eval_agent; from evaluator.core.interfaces.abstract_eval_agent import AbstractEvalAgent; print(sorted(AbstractEvalAgent.get_all()))"
+```

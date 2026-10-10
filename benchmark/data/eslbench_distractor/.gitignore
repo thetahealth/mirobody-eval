@@ -9,11 +9,6 @@
 !distractor-behavioral-*.jsonl
 !distractor-computable-*.jsonl
 
-# one-off analysis / launcher scripts (not part of the benchmark harness)
-inspect_inversion.py
-difficulty_slice.py
-rejudge_*.py
-run_v11_dashscope.py
 
 # local eval output, if ever written under data/ (canonical home is benchmark/report/)
 report/

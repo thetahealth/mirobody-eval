@@ -12,5 +12,5 @@ benchmark — 评测集管理与跑分执行
 示例:
   python -m benchmark.basic_runner healthbench sample
   python -m benchmark.basic_runner healthbench full --limit 100
-  python -m benchmark.basic_runner extraction simple -p 5
+  python -m benchmark.basic_runner medcalc sample -p 5
 """

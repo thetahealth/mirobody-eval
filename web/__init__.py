@@ -1,1 +1,1 @@
-"""holyeval-web — HolyEval Web UI"""
+"""holyeval-web — mirobody-eval Web UI"""

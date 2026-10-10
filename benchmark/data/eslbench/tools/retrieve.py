@@ -1,4 +1,4 @@
-"""retrieve — ThetaGen JSON 检索与 DuckDB 查询工具组
+"""retrieve — 用户数据 JSON 检索与 DuckDB 查询工具组
 
 通过 ToolRuntime 注入运行时上下文（user_email），context 由 ainvoke(context=...) 透传。
 
@@ -1590,7 +1590,7 @@ def _source_user_id(ctx: ToolContext) -> str:
             if isinstance(timeline, dict) and timeline.get("user_id"):
                 return str(timeline["user_id"])
         except Exception:
-            logger.warning("[thetagen] 读取 timeline.json user_id 失败", exc_info=True)
+            logger.warning("[retrieve] 读取 timeline.json user_id 失败", exc_info=True)
     return ctx.user_dir_name
 
 
@@ -1708,6 +1708,20 @@ def _hydrate_event_medications(con: Any, ctx: ToolContext) -> None:
 def _ensure_hydrated_duckdb(ctx: ToolContext) -> Path:
     import shutil
     import tempfile
+
+    # 数据没下载时早报错、并说清怎么办。
+    #
+    # 下面的 `mkstemp(dir=ctx.data_dir)` 在目录不存在时抛的是
+    # `FileNotFoundError: .../user5026_AT_demo/.holyeval_tmp_xxxx.duckdb` ——
+    # 一个关于临时文件的报错，指不到真实原因（这个用户的数据面还没拉下来）。
+    # ESLBench 的数据不随仓库走，而 README 的命令清单里 eslbench 那条排在数据
+    # 准备说明之前,所以这是新用户几乎一定会先撞上的一处。
+    if not ctx.data_dir.is_dir():
+        raise FileNotFoundError(
+            f"用户数据目录不存在: {ctx.data_dir}\n"
+            f"ESLBench 的数据不随仓库分发，先拉一次:\n"
+            f"    python -m generator.eslbench.prepare_data"
+        )
 
     cache_path = _cache_db_path(ctx)
     source_paths = [
@@ -1848,7 +1862,7 @@ def query_duckdb(sql: str, runtime: ToolRuntime[ToolContext]) -> str:
         rendered += "\n... (" + "; ".join(notes) + ")"
 
     logger.info(
-        "[thetagen.query_duckdb] user=%s rows=%d cols=%d chars=%d notes=%s",
+        "[retrieve.query_duckdb] user=%s rows=%d cols=%d chars=%d notes=%s",
         ctx.user_dir_name,
         len(rows),
         len(columns),

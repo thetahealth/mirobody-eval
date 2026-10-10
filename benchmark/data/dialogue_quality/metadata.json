@@ -1,16 +1,33 @@
 {
-  "description": "# Dialogue Quality Evaluation\n\nMulti-turn dialogue quality evaluation for Theta Health AI.\n\n## Layer 1 (RECORD + RETRIEVAL)\nTests RECORD acknowledgment quality and RETRIEVAL data accuracy.\n**Evaluator**: `record_retrieval` (zero LLM, per-turn checkpoints)\n\n| Dataset | Cases | Purpose |\n|---------|-------|---------|\n| smoke | 5 | CI gate — fast smoke test |\n| smoke2 | 5 | Rigor smoke (multimodal + proactive chart + fabrication guard + latency/TTFT) — uses `rubric` evaluator |\n| core | 15+ | Full evaluation — all record types |\n\n## Layer 2 (Dialogue Quality)\nLLM-as-judge multi-dimension quality scoring for complex health management scenarios.\n**Evaluator**: `dialogue_quality` (6 dimensions, LLM judge)\n\n| Dataset | Cases | Purpose |\n|---------|-------|---------|\n| l2_core | 12 | Health interpret + plan + Q&A, with persona combos |\n| l2_hard | 9 | Adversarial: contradiction + danger + memory pressure |\n\n## Rubric Evaluator (new)\n`smoke2` now runs on the generic `rubric` evaluator: per-turn `latency` budgets + `criteria` list (either `llm_rubric` natural-language rubric or `signal_check` against registered signals like `has_chart` / `has_table` / `char_count`). Always returns `result=\"scored\"` — no pass/fail. See `evaluator/plugin/eval_agent/rubric_eval_agent.py`.\n\n**Target**: `theta_api` (Theta Health API) / `theta_smart_api` (theta-smart backend; supports TTFT)",
+  "description": "# Dialogue Quality (RECORD + RETRIEVAL)\n\nMulti-turn evaluation of two things a health assistant does constantly: confirming\na reading the user just stated, and returning that reading when asked for it\nlater. Both failures are invisible to a single-turn benchmark.\n\n## Layer 1 — rule-based, zero LLM\n`record_retrieval`, per-turn checkpoints.\n\n| Dataset | Cases | Purpose |\n|---|---|---|\n| smoke | 5 | fast gate |\n| smoke2 | 4 | image attachment + proactive chart + fabrication guard + latency (uses `rubric`) |\n| core | 15 | every record type |\n\n## Layer 2 — LLM-as-judge\n`dialogue_quality`, six dimensions with per-persona penalty rules.\n\n| Dataset | Cases | Purpose |\n|---|---|---|\n| l2_core | 12 | interpretation + planning + Q&A, across persona combinations |\n| l2_hard | 9 | adversarial: contradictory input, unsafe requests, memory pressure |\n\nThe `record_ack` character budget is a product convention rather than a universal\none — see this dataset's README before comparing scores across systems.",
   "target": [
     {
-      "type": "theta_api",
+      "type": "llm_api",
       "fields": {
-        "agent": {"default": "expert", "editable": true}
+        "model": {
+          "default": "gpt-5.4-mini",
+          "editable": true,
+          "required": true
+        }
       }
     },
     {
-      "type": "theta_smart_api",
+      "type": "mirobody",
       "fields": {
-        "agent": {"default": "expert", "editable": true}
+        "agent": {
+          "default": "Deep",
+          "editable": true,
+          "required": false
+        },
+        "user_email": {
+          "default": null,
+          "editable": true,
+          "required": true
+        },
+        "language": {
+          "default": "en",
+          "editable": false
+        }
       }
     }
   ]

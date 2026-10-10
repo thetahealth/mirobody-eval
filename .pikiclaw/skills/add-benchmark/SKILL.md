@@ -25,21 +25,18 @@ argument-hint: "[benchmark paper URL or GitHub repo URL]"
 | `benchmark/data/<name>/metadata.json` | 新建（数据集元信息） |
 | `benchmark/data/<name>/<dataset>.jsonl` | 新建（由 converter 生成） |
 | `evaluator/plugin/eval_agent/<name>_eval_agent.py` | **仅 Case B**: 新建（EvalAgent plugin） |
-| `evaluator/plugin/eval_agent/__init__.py` | **仅 Case B**: 追加 import + `__all__` + docstring。不得删除/修改已有内容 |
+| `evaluator/plugin/eval_agent/__init__.py` | **不要改**：pkgutil 按 `_eval_agent.py` 后缀自动导入 |
 
 ### 🟡 Schema 扩展点 — 仅限追加（Case B）
 
-`evaluator/core/schema.py` 是 Pydantic Discriminated Union 的类型注册文件。由于 Pydantic v2 要求 Union 成员在定义时静态列举，新增配置类型必须在此文件中追加。
-
-**允许的操作（纯追加，不改已有代码）**：
-1. 在 `EvalInfo` Union 定义**之前**添加新的 `*EvalInfo` 配置类（及其依赖的辅助模型）
-2. 在 `EvalInfo = Annotated[..., Discriminator("evaluator")]` 中追加新类型
-3. 更新文件顶部 docstring 的 `EvalInfo` 列表
+`evaluator/core/schema.py` **不需要改**。`EvalInfo` 是
+`Annotated[Any, BeforeValidator(_validate_eval_info)]`，运行时按 `evaluator` 字段从
+`AbstractEvalAgent` 的注册表取出该插件的 `params_model`。配置类写在插件文件里，
+用 `params_model=` 注册即可。
 
 **禁止的操作**：
-- 修改任何已有的类定义（字段、默认值、validator 等）
-- 修改 Union 的构建逻辑或 Discriminator 配置
-- 修改其他 section 的任何代码（UserInfo, TargetInfo, TestCase, TestResult 等）
+- 修改 `evaluator/core/schema.py` 的任何分发逻辑
+- 修改其他插件的类定义
 
 > Case A（复用现有评估器）**完全不需要修改 schema.py**。
 
@@ -48,12 +45,12 @@ argument-hint: "[benchmark paper URL or GitHub repo URL]"
 以下文件为框架核心，任何修改都可能破坏全局功能：
 
 - `evaluator/core/orchestrator.py` — 编排引擎（do_single_test / BatchSession）
-- `evaluator/core/bench_schema.py` — Benchmark 数据模型（BenchItem / merge_target / bench_item_to_test_case）
+- `evaluator/core/bench_schema.py` — Benchmark 数据模型（BenchItem / resolve_effective_target / bench_item_to_test_case）
 - `evaluator/core/interfaces/abstract_*.py` — 三类 Agent 抽象基类
 - `evaluator/utils/*.py` — 通用工具层（llm, benchmark_reader, report_reader, agent_inspector, config）
 - `evaluator/plugin/test_agent/` — 已有 TestAgent 插件（manual / auto）
-- `evaluator/plugin/target_agent/` — 已有 TargetAgent 插件（llm_api / theta_api）
-- `evaluator/plugin/eval_agent/` 中的**已有**文件 — 不得修改 semantic / healthbench / keyword / preset_answer / indicator
+- `evaluator/plugin/target_agent/` — 已有 TargetAgent 插件（llm_api / hermes / evermem / *_rag_api）
+- `evaluator/plugin/eval_agent/` 中的**已有**文件 — 不得修改随框架发布的任何评测器（semantic / rubric / healthbench / medcalc / kg_qa / record_retrieval / dialogue_quality / engagement）
 - `benchmark/basic_runner.py` — 跑分执行器
 - `web/` — Web UI
 
@@ -76,7 +73,7 @@ argument-hint: "[benchmark paper URL or GitHub repo URL]"
 | 角色 | 职责 | Benchmark 集成时是否需要新增？ |
 |------|------|-------------------------------|
 | **TestAgent**（虚拟用户） | 模拟真实用户发送消息 | **几乎不需要** — 现有 `manual`/`auto` 覆盖所有场景 |
-| **TargetAgent**（被测系统） | 封装被测系统的调用 | **原则上不需要** — 现有 `llm_api`/`theta_api` 已足够 |
+| **TargetAgent**（被测系统） | 封装被测系统的调用 | **原则上不需要** — 现有 `llm_api` / `hermes` / `*_rag_api` 已足够 |
 | **EvalAgent**（评估器） | 评判对话质量 | **可能需要** — 取决于评估方法论是否已有对应实现 |
 
 ### 已有 TestAgent 插件（虚拟用户）
@@ -93,11 +90,12 @@ argument-hint: "[benchmark paper URL or GitHub repo URL]"
 | 名称 | 类 | 工作方式 | 配置字段 |
 |------|-----|---------|---------|
 | `llm_api` | `LlmApiTargetAgent` | 通过 `do_execute()` 统一调用大模型（OpenAI/Gemini/Anthropic/GLM），自动维护多轮对话历史 | `model`（必填）, `system_prompt`（可选） |
-| `theta_api` | `ThetaApiTargetAgent` | 通过 HTTP API 调用 Theta Health 后端，使用 `create_message` + `list_message` 轮询模式 | `email`（必填）, `code`, `agent`, `language`, `timezone` |
+| `hermes` | `HermesTargetAgent` | 通过 HTTP API 调用外部被测服务，自行管理 session/token | `base_url`, `user_email` 等（见 `HermesTargetInfo`） |
+| `*_rag_api` | `EvermemTargetAgent` / `Mem0RagApiTargetAgent` / `NaiveRagApiTargetAgent` / `HippoRagApiTargetAgent` / `DygRagApiTargetAgent` | 各记忆/RAG 服务的接入 | `user_email` 等（见各自的 `*TargetInfo`） |
 
 > **⚠️ 关于自定义 TargetAgent**: 对于外部 benchmark 集成，**原则上不需要自定义 TargetAgent**。
 > - 如果 benchmark 是评测大模型能力 → 使用 `llm_api`（运行时通过 `--target-model` 指定模型）
-> - 如果 benchmark 是评测 Theta Health 产品 → 使用 `theta_api`
+> - 如果 benchmark 是评测某个记忆/RAG 服务 → 使用对应的 `*_rag_api` / `hermes`
 > - **如果你判断需要自定义 TargetAgent，这几乎一定意味着理解有误**。请务必在 Checkpoint 1 中向用户确认，说明为什么现有 target 不够用，并获得明确同意后才继续。
 
 ### 已有 EvalAgent 插件（评估器）
@@ -106,9 +104,12 @@ argument-hint: "[benchmark paper URL or GitHub repo URL]"
 |------|---------|-----|---------|
 | `semantic` | 通用多维度语义评估 | 是 | LLM 按 criteria 独立打分 → 加权总分 → 对比 threshold → pass/fail |
 | `healthbench` | HealthBench rubric 评测 | 是 | LLM 逐条判定 criterion → 按 points 加权计算 → scored（不做 pass/fail） |
-| `keyword` | 关键词/规则匹配 | 否 | 按 rules 配置检查对话文本 → 加权计分 → 对比 threshold → pass/fail |
-| `preset_answer` | 标准答案比对 | 否 | 数字容差/关键词/精确匹配 → pass/fail |
-| `indicator` | 健康指标数据比对 | 是 | 调用 Theta API 获取真实数据 → LLM 比对 → pass/fail |
+| `rubric` | 逐轮 rubric（自然语言判据 + 信号检查 + 时延预算） | 是 | 按 turn 逐条判定 criteria → 加权 → pass/fail |
+| `medcalc` | 医学计算题标准答案比对 | 是 | LLM 抽取答案 → 按类型做数值容差匹配 → pass/fail |
+| `kg_qa` | 知识图谱问答 | 是 | 数值容差 + 分步给分 |
+| `record_retrieval` | 记录确认与检索准确性 | 否 | 逐轮 checkpoint 规则判定 → pass/fail |
+| `dialogue_quality` | 多维对话质量 | 是 | LLM 多维打分 |
+| `engagement` | 虚拟用户是否真的参与 | 是 | LLM 判定 engaged/not |
 
 ### 决策树：判断需要实现哪些组件
 
@@ -116,8 +117,8 @@ argument-hint: "[benchmark paper URL or GitHub repo URL]"
 外部 benchmark 的评估方法论是否已有对应的 EvalAgent？
 │
 ├─ YES → 仅需 Converter + 数据目录 （Case A: 轻量集成）
-│        例：答案匹配类 → 复用 preset_answer
-│        例：关键词检查类 → 复用 keyword
+│        例：数值答案匹配类 → 复用 medcalc
+│        例：逐轮判据类 → 复用 rubric
 │        例：多维度语义评估 → 复用 semantic
 │
 └─ NO  → Converter + EvalInfo Config + EvalAgent Plugin + 数据目录 （Case B: 完整集成）
@@ -203,7 +204,7 @@ Question 3: 被测系统类型 (TargetAgent)
 - prompt: "被测系统类型 — 以下选项使用已有 TargetAgent，运行时通过 CLI 参数指定模型"
 - options:
   - "llm_api — 通用大模型 API（OpenAI/Gemini/Anthropic 等）【推荐】"
-  - "theta_api — Theta Health 产品 API"
+  - "hermes / *_rag_api — 外部被测服务（记忆、RAG 等）"
   - "⚠️ 需要自定义 TargetAgent（请说明原因）"
 
 Question 4: 评估器类型 (EvalAgent)
@@ -393,9 +394,9 @@ if __name__ == "__main__":
 
 | 评估器 | eval 配置示例 |
 |--------|-------------|
-| `preset_answer` | `{"evaluator": "preset_answer", "standard_answer": "42", "match_mode": "number"}` |
-| `keyword` | `{"evaluator": "keyword", "rules": [...], "pass_threshold": 0.7}` |
 | `semantic` | `{"evaluator": "semantic", "criteria": [...], "threshold": 0.7}` |
+| `medcalc` | `{"evaluator": "medcalc", "ground_truth": "42", "output_type": "integer"}` |
+| `rubric` | `{"evaluator": "rubric", "turns": [{"turn": 1, "criteria": [{"name": "...", "llm_rubric": "..."}]}]}` |
 | `healthbench` | `{"evaluator": "healthbench", "rubrics": [{"criterion": "...", "points": 10, "tags": [...]}]}` |
 | 自定义 | `{"evaluator": "<new_name>", ...}`（需完成 Phase 2） |
 
@@ -412,9 +413,9 @@ if __name__ == "__main__":
 
 #### 2.1 添加 EvalInfo 配置类
 
-**修改**: `evaluator/core/schema.py`
+**新建**: `evaluator/plugin/eval_agent/<name>_eval_agent.py`（配置类与实现同文件）
 
-在 `EvalInfo` Discriminated Union 定义**之前**添加新的 Pydantic 配置类：
+在文件顶部添加 Pydantic 配置类：
 
 ```python
 class <Name>EvalInfo(BaseModel):
@@ -426,7 +427,7 @@ class <Name>EvalInfo(BaseModel):
     # ... benchmark 特有的评估配置字段
 ```
 
-然后将新类型加入 `EvalInfo` Union，同时更新 schema.py 文件顶部的 docstring。
+配置类与实现放在同一个插件文件里，用 `params_model=` 注册；`schema.py` 不需要改。
 
 #### 2.2 实现 EvalAgent Plugin
 
@@ -443,11 +444,12 @@ class <Name>EvalInfo(BaseModel):
 参考实现:
 - **LLM rubric 评估**: `evaluator/plugin/eval_agent/healthbench_eval_agent.py`（`_build_conversation` + 并发 grade + `_calculate_score`）
 - **LLM 语义评估**: `evaluator/plugin/eval_agent/semantic_eval_agent.py`
-- **规则评估**: `evaluator/plugin/eval_agent/preset_answer_eval_agent.py`
+- **规则评估（零 LLM）**: `evaluator/plugin/eval_agent/record_retrieval_eval_agent.py`
 
 #### 2.3 注册 Plugin
 
-**修改**: `evaluator/plugin/eval_agent/__init__.py` — 添加 import + `__all__` + docstring。
+**无需修改任何文件**：文件名以 `_eval_agent.py` 结尾即被 pkgutil 自动导入，
+类上的 `params_model=` 把配置模型写进注册表。
 
 ---
 
@@ -464,7 +466,7 @@ class <Name>EvalInfo(BaseModel):
     {
       "type": "llm_api",
       "fields": {
-        "model": {"default": "gpt-4.1", "editable": true, "required": true}
+        "model": {"default": "gpt-5.4-mini", "editable": true, "required": true}
       }
     }
   ]
@@ -474,7 +476,7 @@ class <Name>EvalInfo(BaseModel):
 字段说明：
 - `description`: Markdown 格式，Web UI 渲染展示
 - `target`: **TargetSpec 数组**，每个元素定义一种被测系统类型（参考 `benchmark/data/healthbench/metadata.json`）
-  - `type`: agent 类型（`llm_api` / `theta_api`）
+  - `type`: agent 类型（`llm_api` / `hermes` / `*_rag_api`）
   - `fields`: 各字段的默认值、是否可编辑（`editable`）、是否必填（`required`）
   - 单 target → CLI/Web 自动使用；多 target → CLI `--target-type` 指定
 - `params`（可选）: 共享参数字典，供 JSONL 条目通过 `$ref` 引用（见下方说明）
@@ -506,7 +508,18 @@ class <Name>EvalInfo(BaseModel):
 - 引用 key 未找到时输出警告，保持原值
 - 典型场景：同一用户画像的多条用例共享 `history`
 
-参考实现: `benchmark/data/history_demo/`
+写法：共享片段定义在 `metadata.json` 的 `params` 里，用例侧用 `{"$ref": "<key>"}` 整体替换该字段。
+
+```jsonc
+// metadata.json
+{ "params": { "diabetic_user_history": [
+      {"role": "user", "content": "I'm a 45-year-old male with type 2 diabetes ..."},
+      {"role": "assistant", "content": "Thank you for sharing that ..."}
+] } }
+
+// <dataset>.jsonl —— 多条用例共享同一段 history
+{"id": "hd_001", "user": {...}, "eval": {...}, "history": {"$ref": "diabetic_user_history"}}
+```
 
 #### 3.2 执行转换
 
@@ -595,7 +608,7 @@ Question 1: 端到端测试
 
 ```bash
 uv run python -m benchmark.basic_runner <benchmark_name> <dataset> \
-  --target-type llm_api --target-model gpt-4.1 \
+  --target-type llm_api --target-model gpt-5.4-mini \
   --limit <N> -v
 ```
 
@@ -609,7 +622,7 @@ uv run python -m benchmark.basic_runner <benchmark_name> <dataset> \
 
 在 Phase 0 阅读论文/仓库时，就应记录以下信息（如有）：
 
-- **原版基准分数**: 论文中同一模型（如 gpt-4.1）在同一数据子集上的分数
+- **原版基准分数**: 论文中同一模型（如 gpt-5.4-mini）在同一数据子集上的分数
 - **分数指标定义**: avg_score? pass_rate? accuracy? 与 HolyEval 的 `avg_score` / `pass_rate` 如何对应
 - **测试条件**: 原版使用的 grader 模型、temperature、采样次数等
 - **已知差异**: 例如原版可能跑 3 次取平均，HolyEval 默认跑 1 次
@@ -758,9 +771,9 @@ Question 1: 对比结果
 | 组件 | 文件 | 作用 |
 |------|------|------|
 | Converter | `generator/healthbench/converter.py` | HealthBench JSONL → BenchItem JSONL |
-| EvalInfo | `evaluator/core/schema.py` → `HealthBenchEvalInfo` | rubrics 配置结构 |
+| EvalInfo | `evaluator/plugin/eval_agent/healthbench_eval_agent.py` → `HealthBenchEvalInfo` | rubrics 配置结构 |
 | EvalAgent | `evaluator/plugin/eval_agent/healthbench_eval_agent.py` | 原版 GRADER_TEMPLATE + scoring |
-| 注册 | `evaluator/plugin/eval_agent/__init__.py` | import 触发注册 |
+| 注册 | 文件名以 `_eval_agent.py` 结尾即被 pkgutil 自动导入 | `params_model=` 写入注册表 |
 | 数据 | `benchmark/data/healthbench/metadata.json` | 元信息（target_configurable: true） |
 | 数据 | `benchmark/data/healthbench/sample.jsonl` 等 | 转换后的 BenchItem 数据 |
 
@@ -796,7 +809,7 @@ class BenchItem(BaseModel):
     title: str                      # 一句话标题
     description: Optional[str]      # 补充说明
     user: BenchUserInfo             # 虚拟用户配置（含 target_overrides）
-    eval: EvalInfo                  # 评估配置（Discriminated Union）
+    eval: EvalInfo                  # 评估配置（按 evaluator 字段走注册表分发）
     history: List[Dict[str, str]]   # 可选，评测前历史对话 [{role, content}]
     tags: List[str]                 # 分类标签
 ```
@@ -822,9 +835,8 @@ BenchReport
 - [ ] `generator/<name>/converter.py` 可正确转换数据
 - [ ] `benchmark/data/<name>/metadata.json` 格式正确
 - [ ] `benchmark/data/<name>/<dataset>.jsonl` 可被 `load_bench_items()` 加载
-- [ ] （Case B）`evaluator/core/schema.py` 中新增 EvalInfo 配置类并加入 Union
-- [ ] （Case B）`evaluator/plugin/eval_agent/<name>_eval_agent.py` 实现完整
-- [ ] （Case B）`evaluator/plugin/eval_agent/__init__.py` 注册新 EvalAgent
+- [ ] （Case B）`evaluator/plugin/eval_agent/<name>_eval_agent.py` 内含配置类与实现，
+      并在类上传了 `params_model=`（不传则 `未注册的 evaluator`）
 - [ ] `benchmark_reader.list_benchmarks()` 可发现新数据集
 - [ ] `ruff check` 和 `ruff format` 通过
 - [ ] 端到端小规模测试通过

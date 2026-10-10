@@ -1,11 +1,11 @@
 """Generic task-lifecycle webhook delivery.
 
 设计原则:
-- 通用机制, 不感知任何具体订阅者 (hma-web 或别的)
+- 通用机制, 不感知任何具体订阅者
 - 调用方在创建任务时声明 callback_url + callback_secret, 由此函数透明投递
 - Fire-and-forget: 失败仅记日志, 不影响主流程 (eval session)
 - 重试: 3 次指数退避 (1s / 3s / 9s); 每次 5s 超时
-- 签名: X-Webhook-Secret header (与 hma-web 现有 hf-dataset webhook 一致, 简单可靠)
+- 签名: X-Webhook-Secret header (与常见 hf-dataset webhook 约定一致, 简单可靠)
 """
 
 from __future__ import annotations

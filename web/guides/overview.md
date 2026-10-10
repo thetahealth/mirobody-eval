@@ -1,20 +1,19 @@
-<!-- Project Overview - HolyEval -->
+<!-- Project Overview - mirobody-eval -->
 
 ## Introduction
 
-HolyEval is a **virtual user evaluation framework** designed for AI medical assistants (Theta Health). It systematically evaluates AI assistant performance through automated multi-turn conversation testing and multi-dimensional assessment.
+mirobody-eval is a **virtual user evaluation framework** designed for AI medical assistants. It systematically evaluates AI assistant performance through automated multi-turn conversation testing and multi-dimensional assessment.
 
 ## Architecture Overview
 
-![HolyEval Architecture Diagram](/static/images/architecture.png)
+mirobody-eval adopts a modular design. Its components map onto the four workspace members:
 
-HolyEval adopts a modular design, consisting of six core components as shown above. Components 2-6 correspond to the three core directories of the project:
+- **evaluator** — Virtual user evaluation framework + system-under-test integration
+- **generator** — Benchmark Generator + Benchmark Wrapper
+- **benchmark** — Benchmark Scheduler (batch scheduling center)
+- **web** — This management interface
 
-- **evaluator** — Corresponds to components ②③: Virtual user evaluation framework + system-under-test integration
-- **generator** — Corresponds to components ④⑥: Benchmark Generator + Benchmark Wrapper
-- **benchmark** — Corresponds to component ⑤: Benchmark Scheduler (batch scheduling center)
-
-### ② Virtual User Evaluation Framework (evaluator/)
+### Virtual User Evaluation Framework (evaluator/)
 
 Provides core evaluation capabilities based on a three-layer Agent architecture:
 
@@ -22,7 +21,7 @@ Provides core evaluation capabilities based on a three-layer Agent architecture:
 |-----------|---------|---------|
 | **TestAgent** | Simulates virtual user behavior | Supports LLM-driven natural conversation and script-driven exact replay |
 | **TargetAgent** | Integrates with the system under test | Unified wrapper for real system APIs and simulated LLM calls |
-| **EvalAgent** | Evaluates conversation quality | Offers semantic, indicator, rule-based, reference answer, and other multi-dimensional evaluation methods |
+| **EvalAgent** | Evaluates conversation quality | Offers semantic, rubric, knowledge-graph QA, rule-based, and other multi-dimensional evaluation methods |
 
 **Core Evaluation Flow**:
 1. TestAgent initiates conversation (based on user goal and context)
@@ -31,31 +30,36 @@ Provides core evaluation capabilities based on a three-layer Agent architecture:
 4. EvalAgent performs multi-dimensional evaluation based on the complete conversation history
 5. Generates TestResult (score, pass rate, detailed feedback, cost statistics)
 
-### ③ System-Under-Test Integration (evaluator/plugin/target_agent/)
+### System-Under-Test Integration (evaluator/plugin/target_agent/)
 
 Supports two execution modes for integrating different types of systems under test:
 
-- **Real system integration**: Interacts with the production environment via the Theta Health HTTP API to verify real-world performance
+- **Real system integration**: Talks to a live system under test over its HTTP API to verify real-world performance
 - **Simulated system integration**: Directly calls LLM APIs to simulate system behavior for quick validation of evaluation logic
 
-### ④ Benchmark Generator (generator/)
+Eight targets ship: `mirobody` — a self-hosted deployment of the engine this
+project evaluates, seeded with synthetic data and driven as a signed-in user —
+plus `llm_api` as a retrieval-only baseline and six external memory/RAG systems
+to compare against.
 
-**Capabilities**: Converts external evaluation datasets into HolyEval standard format
+### Benchmark Generator (generator/)
 
-- **Data conversion**: Supports mainstream AI evaluation datasets including HealthBench, MedCalc-Bench, MemoryArena, and more
+**Capabilities**: Converts external evaluation datasets into mirobody-eval standard format
+
+- **Data conversion**: Supports mainstream AI evaluation datasets including HealthBench, MedCalc-Bench, ESL-Bench, and more
 - **Business abstraction**: Maps raw evaluation scenarios (prompt + rubrics) to the BenchItem standard format, supporting multi-turn conversation context (`history` field)
 - **Flexible configuration**: Supports custom evaluation criteria, conversation history, and virtual user configuration
 
-### ⑤ Benchmark Scheduler (benchmark/)
+### Benchmark Scheduler (benchmark/)
 
 **Capabilities**: Scheduling, execution, and progress management for batch evaluations
 
 - **Batch scheduling**: Supports concurrent execution of thousands of test cases (configurable concurrency)
 - **Real-time monitoring**: Tracks execution status of each case (pending/in-dialogue/evaluating/completed/cancelled)
 - **Flexible control**: Supports task cancellation at any time and progress snapshot export
-- **Data organization**: Manages test data in directories organized by evaluation type (healthbench/medcalc/extraction)
+- **Data organization**: Manages test data in directories organized by evaluation type (healthbench/medcalc/eslbench)
 
-### ⑥ Benchmark Wrapper (shared with generator/)
+### Benchmark Wrapper (shared with generator/)
 
 **Capabilities**: Standardized packaging and persistence of evaluation results
 
@@ -66,20 +70,19 @@ Supports two execution modes for integrating different types of systems under te
 ## Directory Structure and Responsibilities
 
 ```
-holyeval/
-├── evaluator/              # ②③ Virtual user evaluation framework + system integration
+mirobody-eval/
+├── evaluator/              # Virtual user evaluation framework + system integration
 │   ├── core/              # Core evaluation engine (orchestrator, data models)
 │   ├── plugin/            # Three-layer Agent plugin implementations
 │   └── utils/             # Shared utilities (LLM calls, data reading)
 │
-├── generator/             # ④⑥ Data generation + result wrapping
+├── generator/             # Data generation + result wrapping
 │   ├── healthbench/       # HealthBench data converter
 │   ├── medcalc/           # MedCalc-Bench data converter
-│   ├── agentclinic/       # AgentClinic data converter
-│   ├── medhall/           # MedHall hallucination case generation + conversion
-│   └── memoryarena/       # MemoryArena data converter
+│   ├── eslbench/          # ESL-Bench data prep (HuggingFace download + DuckDB index)
+│   └── virtual_user/      # Virtual-user persona / case generation + report analysis
 │
-├── benchmark/             # ⑤ Batch scheduling center
+├── benchmark/             # Batch scheduling center
 │   ├── data/              # Evaluation datasets (organized by type)
 │   ├── report/            # Evaluation reports (auto-generated)
 │   └── basic_runner.py    # CLI runner
@@ -92,19 +95,18 @@ holyeval/
 
 ## Core Evaluation Capabilities
 
-HolyEval provides six evaluation methods covering different evaluation scenarios:
+mirobody-eval ships eight evaluators covering different evaluation scenarios:
 
 | Evaluator | Use Case | Evaluation Method |
 |--------|---------|---------|
 | **semantic** | General semantic quality | LLM-based subjective quality assessment (safety, empathy, professionalism) |
+| **rubric** | Per-turn rubric scoring | Natural-language criteria + registered signal checks + latency budgets |
 | **healthbench** | HealthBench standard | Rubric-based multi-dimensional scoring (concurrent evaluation of all rubric items) |
 | **medcalc** | Medical calculation | LLM answer extraction + typed numerical matching (decimal/integer/date/weeks_days) |
-| **hallucination** | Medical hallucination detection | LLM-as-Judge detecting factual/contextual/citation hallucinations, scoring 0~1 |
-| **indicator** | Health data accuracy | Validates whether health indicators (exercise, sleep) returned by the system are correct |
-| **keyword** | Keyword rules | Quick validation that responses contain required keywords |
-| **preset_answer** | Reference answer matching | Exact match or keyword match against preset answers |
-| **redteam_compliance** | Red-team compliance testing | LLM-as-Judge evaluating medical AI response compliance (defense against adversarial prompts) |
-| **memoryarena** | Agent memory evaluation | LLM-as-Judge per-subtask assessment + Progress Score (5 domains) |
+| **kg_qa** | Knowledge-graph QA | Numeric tolerance + stepwise credit, routed by answer type (used by ESL-Bench) |
+| **record_retrieval** | Record & retrieval accuracy | Zero-LLM per-turn checkpoints |
+| **dialogue_quality** | Multi-turn dialogue quality | LLM-as-Judge multi-dimension scoring |
+| **engagement** | Virtual-user engagement | LLM-as-Judge on whether the simulated user actually engaged |
 
 ## Execution Modes
 
@@ -128,5 +130,4 @@ Three execution methods are supported to fit different use cases:
 - `/add-benchmark` — Integrate an external benchmark (research -> conversion -> validation end-to-end)
 - `/add-eval-agent` — Scaffold: add a new evaluation logic plugin
 - `/add-target-agent` — Scaffold: add a new system-under-test plugin
-- `/run-e2e-test` — Run end-to-end tests
 - `/run-benchmark` — Run benchmark scoring

@@ -1,21 +1,10 @@
 {
-  "description": "# MedCalc-Bench\n\nMedCalc-Bench 医疗计算评测数据集，基于 [NCBI MedCalc-Bench](https://github.com/ncbi-nlp/MedCalc-Bench) 项目（arXiv:2406.12036）。\n\n评估 LLM 的医疗数值推理能力，涵盖 **55 种医学计算器**，包括方程类（肌酐清除率、BMI、药物剂量等）和规则类（风险评分、严重程度分级等）。\n\n## 子集\n\n| 子集 | 数量 | 说明 |\n|------|------|------|\n| sample | 5 | 甄选样本（覆盖多种计算器类型） |\n| full | ~1,047 | 完整测试集 |\n\n**评估器**: `medcalc`（LLM 答案提取 + 类型化数值匹配）\n\n**输出类型**: decimal（±5%容差）、integer（精确匹配）、date（精确匹配）、weeks_days（精确匹配）",
+  "description": "# MedCalc-Bench\n\nMedCalc-Bench 医疗计算评测数据集，基于 [NCBI MedCalc-Bench](https://github.com/ncbi-nlp/MedCalc-Bench) 项目（arXiv:2406.12036）。\n\n评估 LLM 的医疗数值推理能力，涵盖 **55 种医学计算器**，包括方程类（肌酐清除率、BMI、药物剂量等）和规则类（风险评分、严重程度分级等）。\n\n## 子集\n\n| 子集 | 数量 | 说明 |\n|------|------|------|\n| sample | 50 | 甄选样本（覆盖多种计算器类型） |\n| full | 1,100 | 完整测试集 |\n\n**评估器**: `medcalc`（LLM 答案提取 + 类型化数值匹配）\n\n**输出类型**: decimal（±5%容差）、integer（精确匹配）、date（精确匹配）、weeks_days（精确匹配）",
   "target": [{
     "type": "llm_api",
     "fields": {
       "model": {"default": "gpt-4.1", "editable": true, "required": true},
       "system_prompt": {"default": null, "editable": true}
-    }
-  }, {
-    "type": "theta_miroflow",
-    "fields": {
-      "email": {"default": null, "editable": true, "required": true}
-    }
-  }, {
-    "type": "theta_api",
-    "fields": {
-      "email": {"default": "user2@demo", "editable": true, "required": true},
-      "agent": {"default": "expert", "editable": true, "required": false}
     }
   }]
 }

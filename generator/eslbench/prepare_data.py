@@ -1,13 +1,13 @@
 """
 ESLBench 数据准备脚本（canonical implementation）
 
-ThetaGen 和 ESLBench 共享此模块的核心函数。核心函数均接受 benchmark_dir / data_dir / label 参数，
-两个 benchmark 通过传入各自的路径复用同一套逻辑。
+核心函数均接受 benchmark_dir / data_dir / label 参数，不同 benchmark 通过传入
+各自的路径复用同一套逻辑。
 
 Web UI 启动时通过 PrepareManager 自动执行，完成以下步骤:
 1. 从 HuggingFace ($ESLBENCH_HF_REPO, 默认 healthmemoryarena/ESL-Bench) 下载用户数据（基于 manifest.json 增量更新）
 2. 为每个用户创建独立 DuckDB（benchmark/data/{benchmark}/.data/{user_dir}/user.duckdb）
-3. [可选] 生成每用户 JSONL + 汇总 full.jsonl（ThetaGen 使用，ESLBench 已有预制 JSONL）
+3. [可选] 生成每用户 JSONL + 汇总 full.jsonl（ESLBench 已有预制 JSONL，此步可跳过）
 
 目录名即邮箱（_AT_ 替换 @），如 user110_AT_demo → user110@demo。
 自动发现用户目录，无需硬编码用户列表。
@@ -27,13 +27,15 @@ from pathlib import Path
 
 from evaluator.utils import paths
 
-HF_REPO = os.getenv("ESLBENCH_HF_REPO", os.getenv("THETAGEN_HF_REPO", "healthmemoryarena/ESL-Bench"))
+HF_REPO = os.getenv("ESLBENCH_HF_REPO", "healthmemoryarena/ESL-Bench")
 
 # ==================== ESLBench 默认路径 ====================
 
 BENCHMARK_DIR = Path(__file__).resolve().parents[2] / "benchmark" / "data" / "eslbench"
 # DATA_DIR: prod 下读 HOLYEVAL_USER_DATA_DIR/eslbench；dev 下回退 BENCHMARK_DIR/.data
 DATA_DIR = paths.user_data_dir("eslbench")
+# 题包落盘用的子目录名 —— 与读取侧共用一处定义，见 paths.BANKS_DIRNAME
+BANKS_DIRNAME = paths.BANKS_DIRNAME
 
 # ==================== 共享工具函数 ====================
 
@@ -153,7 +155,13 @@ def download_from_hf(data_dir: Path, *, label: str = "eslbench", force: bool = F
         snapshot_dir = snapshot_download(
             repo_id=HF_REPO,
             repo_type="dataset",
-            allow_patterns=[f"data/{batch_id}/*/*.json"],
+            # `*/*.json` is the per-user data surface. `*.jsonl` at the batch
+            # root is the question bank, and it was NOT fetched before: the
+            # leaderboard's dataset for a batch (`manifest.eval_dataset`) could
+            # therefore not be run at all, and what did run came from whatever
+            # copy this repo happened to vendor — with no version relationship
+            # to the manifest the score would be quoted against.
+            allow_patterns=[f"data/{batch_id}/*/*.json", f"data/{batch_id}/*.jsonl"],
         )
         snapshot_batch = Path(snapshot_dir) / "data" / batch_id
 
@@ -174,8 +182,18 @@ def download_from_hf(data_dir: Path, *, label: str = "eslbench", force: bool = F
                         continue  # ground-truth 不复制到本地 .data/
                     shutil.copy2(str(src_file), str(dst_dir / src_file.name))
                     copied += 1
-        total_copied += copied
-        print(f"[{label}] 批次 {batch_id}: {copied} 个文件")
+
+        # 题包保留 batch 层级：目录名就是批次号，读取侧据此把分数锚到
+        # manifest 的 batch checksum，不必再维护一份「数据集 → 批次」索引。
+        banks = 0
+        bank_dir = data_dir / BANKS_DIRNAME / batch_id
+        for src_file in sorted(snapshot_batch.glob("*.jsonl")):
+            bank_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(str(src_file), str(bank_dir / src_file.name))
+            banks += 1
+
+        total_copied += copied + banks
+        print(f"[{label}] 批次 {batch_id}: {copied} 个用户文件, {banks} 个题包")
 
     # 保存 manifest
     _save_local_manifest(remote_manifest, data_dir)
@@ -367,7 +385,7 @@ def build_all_duckdb(data_dir: Path, *, label: str = "eslbench", force: bool = F
     print(f"[{label}] DuckDB 创建完成: {created} 个新建, {skipped} 个已存在跳过")
 
 
-# ==================== Step 3: 生成 JSONL 评测集（可选，ThetaGen 使用） ====================
+# ==================== Step 3: 生成 JSONL 评测集（可选） ====================
 
 
 def build_datasets(benchmark_dir: Path, data_dir: Path, *, label: str = "eslbench", force: bool = False) -> None:

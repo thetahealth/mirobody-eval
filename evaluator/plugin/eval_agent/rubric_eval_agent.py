@@ -787,9 +787,9 @@ def _latency_score(actual_s: float, budget_s: float) -> float:
 def _extract_ttft_seconds(reaction: Any) -> Optional[float]:
     """Find a ``{"type": "latency", "content": {"first_token_ms": N}}`` meta chunk.
 
-    Emitted by target agents that surface first-chunk timing (see
-    ``theta_smart_api_target_agent``). Missing → returns None so the evaluator
-    skips the TTFT dimension instead of penalising unsupported targets.
+    Emitted by target agents that surface first-chunk timing. Missing → returns
+    None so the evaluator skips the TTFT dimension instead of penalising targets
+    that do not report it.
     """
     if reaction is None:
         return None

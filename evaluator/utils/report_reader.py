@@ -105,12 +105,12 @@ def _make_target_label(target: "TargetInfo | None") -> str:
     格式: {type}[_{model}][_{agent}][_k{top_k}]
     - type:  始终包含（区分被测系统类型）
     - model: LLM 模型名（如有）
-    - agent: Agent 类型（如有，theta 系列）
+    - agent: Agent 类型（如有）
     - top_k: 检索数量（如有，RAG 系列）
 
     示例:
         llm_api + gpt-4.1           → llm_api_gpt-4.1
-        theta_api + expert          → theta_api_expert
+        mirobody + Deep             → mirobody_Deep
         hippo_rag_api + gemini-3-flash + k10 → hippo_rag_api_gemini-3-flash-preview_k10
         eval-only                   → eval-only
     """

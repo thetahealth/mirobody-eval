@@ -14,6 +14,86 @@ logger = logging.getLogger(__name__)
 _DATA_DIR = Path(__file__).resolve().parents[2] / "benchmark" / "data"
 
 
+def resolve_dataset(benchmark: str, dataset: str) -> tuple[Path, dict[str, Any]]:
+    """Locate a dataset's JSONL, preferring the copy fetched from the dataset host.
+
+    Two copies of a question bank can exist:
+
+    - the one `prepare_data` fetched, under `<user_data>/_banks/<batch>/`. It came
+      from the release the leaderboard quotes, and the batch is in its path, so a
+      score can be anchored to that batch's manifest checksum.
+    - the one vendored in this repo. It works offline — which is why CI can gate
+      on it — but carries no version relationship to any release.
+
+    The fetched copy wins when present. The returned dict is provenance: it says
+    which of the two was read, and for the fetched one, the batch and checksum a
+    reader would need to reproduce the number.
+    """
+    from evaluator.utils import paths
+
+    fetched = paths.fetched_bank(benchmark, dataset)
+    if fetched:
+        path, batch = fetched
+        prov: dict[str, Any] = {"source": "fetched", "batch": batch}
+        local_manifest = paths.user_data_dir(benchmark) / ".manifest.json"
+        if local_manifest.is_file():
+            try:
+                manifest = json.loads(local_manifest.read_text(encoding="utf-8"))
+                prov["manifest_version"] = manifest.get("version")
+                prov["batch_checksum"] = (manifest.get("batches") or {}).get(batch, {}).get("checksum")
+            except (OSError, json.JSONDecodeError):
+                logger.warning("本地 manifest 读取失败，来源信息不含 checksum: %s", local_manifest)
+        return path, prov
+
+    return _DATA_DIR / benchmark / f"{dataset}.jsonl", {"source": "vendored"}
+
+
+def _unavailable_reason(benchmark: str, evaluator: str, provenance: dict[str, Any]) -> str:
+    """Why a listed dataset cannot be run, in the words a reader needs.
+
+    A dataset with no `evaluator` fails at load. For the newest published batch
+    that is not a defect: the questions ship and the answers follow when the next
+    batch does, so the field is absent by design. Saying which of the two it is
+    matters — one is "wait for the next release", the other is "this file is
+    broken" — so the reason comes from the manifest's `released_answers`, not
+    from guessing.
+    """
+    if evaluator:
+        return ""
+
+    batch = provenance.get("batch")
+    if not batch:
+        return "no evaluator declared — cannot be scored"
+
+    from evaluator.utils import paths
+
+    local_manifest = paths.user_data_dir(benchmark) / ".manifest.json"
+    if local_manifest.is_file():
+        try:
+            manifest = json.loads(local_manifest.read_text(encoding="utf-8"))
+            entry = (manifest.get("batches") or {}).get(batch, {})
+            if not entry.get("released_answers"):
+                return f"answers for batch {batch} are not released yet"
+        except (OSError, json.JSONDecodeError):
+            pass
+    return "no evaluator declared — cannot be scored"
+
+
+def _fetched_dataset_names(benchmark: str) -> set[str]:
+    """Dataset names available only because they were fetched.
+
+    The "dataset does not exist" message listed the vendored files alone, so a
+    reader who had just fetched the release they wanted was told it was not
+    there — with a list that omitted it.
+    """
+    from evaluator.utils import paths
+
+    root = paths.user_data_dir(benchmark) / paths.BANKS_DIRNAME
+    if not root.is_dir():
+        return set()
+    return {p.stem for batch in root.iterdir() if batch.is_dir() for p in batch.glob("*.jsonl")}
+
+
 # ============================================================
 # 内部辅助
 # ============================================================
@@ -166,14 +246,24 @@ def list_benchmarks() -> list[BenchmarkSummary]:
         if not bench_dir.is_dir() or bench_dir.name.startswith((".", "_")):
             continue
 
+        # Fetched banks belong in the listing, not just in the by-name lookup: a
+        # dataset that can be run but never appears in the picker is a dataset
+        # nobody finds. Resolved per name so a fetched copy shadows a vendored
+        # one of the same name, exactly as running it would.
+        names = {p.stem for p in bench_dir.glob("*.jsonl")} | _fetched_dataset_names(bench_dir.name)
         datasets: list[DatasetInfo] = []
-        for jsonl_file in sorted(bench_dir.glob("*.jsonl")):
+        for name in sorted(names):
+            jsonl_file, prov = resolve_dataset(bench_dir.name, name)
+            if not jsonl_file.is_file():
+                continue
+            evaluator = _peek_evaluator(jsonl_file)
             datasets.append(
                 DatasetInfo(
-                    name=jsonl_file.stem,
+                    name=name,
                     case_count=_count_jsonl_lines(jsonl_file),
                     file_size_kb=round(jsonl_file.stat().st_size / 1024, 1),
-                    evaluator=_peek_evaluator(jsonl_file),
+                    evaluator=evaluator,
+                    unavailable_reason=_unavailable_reason(bench_dir.name, evaluator, prov),
                 )
             )
 
@@ -192,7 +282,7 @@ def list_benchmarks() -> list[BenchmarkSummary]:
 
 def get_dataset_detail(benchmark: str, dataset: str, preview_limit: int = 10) -> DatasetDetail:
     """获取 dataset 详情（含预览用例 + 全量轻量摘要）"""
-    jsonl_path = _DATA_DIR / benchmark / f"{dataset}.jsonl"
+    jsonl_path, _ = resolve_dataset(benchmark, dataset)
     if not jsonl_path.exists():
         raise FileNotFoundError(f"数据集不存在: {benchmark}/{dataset}")
 
@@ -252,7 +342,7 @@ def get_dataset_detail(benchmark: str, dataset: str, preview_limit: int = 10) ->
 
 def get_case_by_id(benchmark: str, dataset: str, case_id: str) -> dict[str, Any]:
     """从 JSONL 中按 id 查找单条 case 完整数据"""
-    jsonl_path = _DATA_DIR / benchmark / f"{dataset}.jsonl"
+    jsonl_path, _ = resolve_dataset(benchmark, dataset)
     if not jsonl_path.exists():
         raise FileNotFoundError(f"数据集不存在: {benchmark}/{dataset}")
 
@@ -323,9 +413,9 @@ def load_benchmark(benchmark: str, dataset: str) -> "BenchMark":  # noqa: F821
     metadata = _read_metadata(bench_dir)
 
     # 2. 读取 JSONL（传入 params 用于 $ref 解析）
-    jsonl_path = bench_dir / f"{dataset}.jsonl"
+    jsonl_path, provenance = resolve_dataset(benchmark, dataset)
     if not jsonl_path.exists():
-        available = sorted(p.stem for p in bench_dir.glob("*.jsonl"))
+        available = sorted({p.stem for p in bench_dir.glob("*.jsonl")} | _fetched_dataset_names(benchmark))
         raise FileNotFoundError(f"数据集不存在: {benchmark}/{dataset}\n[{benchmark}] 可用数据集: {available or '(空)'}")
 
     params = metadata.get("params", {})
@@ -352,9 +442,9 @@ def resolve_data_path(benchmark: str, dataset: str) -> Path:
         available = sorted(p.name for p in _DATA_DIR.iterdir() if p.is_dir())
         raise FileNotFoundError(f"评测类型不存在: {benchmark}\n可用评测: {available or '(空)'}")
 
-    path = bench_dir / f"{dataset}.jsonl"
+    path, _ = resolve_dataset(benchmark, dataset)
     if not path.exists():
-        available = sorted(p.stem for p in bench_dir.glob("*.jsonl"))
+        available = sorted({p.stem for p in bench_dir.glob("*.jsonl")} | _fetched_dataset_names(benchmark))
         raise FileNotFoundError(f"数据集不存在: {benchmark}/{dataset}\n[{benchmark}] 可用数据集: {available or '(空)'}")
     return path
 

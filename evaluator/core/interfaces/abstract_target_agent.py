@@ -2,14 +2,14 @@
 AbstractTargetAgent — 被测目标代理抽象基类
 
 职责：
-- 封装被测系统（Holywell API / GUI / 其他系统）
+- 封装被测系统（HTTP API / GUI / 其他系统）
 - 将被测系统的接口适配为统一的 TargetAgentReaction
 - 自动管理被测系统侧的对话记忆
 
 注册机制（__init_subclass__）：
-    class ThetaApiTargetAgent(AbstractTargetAgent, name="theta_api"):
+    class LlmApiTargetAgent(AbstractTargetAgent, name="llm_api"):
         ...
-    查询: AbstractTargetAgent.get("theta_api")
+    查询: AbstractTargetAgent.get("llm_api")
 
 生命周期：
 - 创建：通过 TargetInfo 初始化

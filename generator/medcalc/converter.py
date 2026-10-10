@@ -1,7 +1,7 @@
 """
-MedCalc-Bench → HolyEval 数据转换器
+MedCalc-Bench → mirobody-eval 数据转换器
 
-将 MedCalc-Bench CSV 测试数据转换为 HolyEval BenchItem JSONL，使其可以直接
+将 MedCalc-Bench CSV 测试数据转换为 mirobody-eval BenchItem JSONL，使其可以直接
 通过 `python -m benchmark.basic_runner medcalc <dataset>` 执行。
 
 转换映射:
@@ -32,7 +32,7 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# MedCalc-Bench Output Type 到 HolyEval output_type 的映射
+# MedCalc-Bench Output Type 到 mirobody-eval output_type 的映射
 # 原始 CSV 中 Output Type 字段值: "decimal", "integer", "date"
 # Calculator ID 69 是特殊的 weeks_days 类型
 _WEEKS_DAYS_CALCULATOR_ID = 69
@@ -68,14 +68,14 @@ def _resolve_output_type(row: Dict[str, str]) -> str:
 
 
 def _convert_single(row: Dict[str, str], index: int) -> Optional[Dict[str, Any]]:
-    """将单行 CSV 数据转换为 HolyEval BenchItem dict
+    """将单行 CSV 数据转换为 mirobody-eval BenchItem dict
 
     Args:
         row: CSV DictReader 的一行
         index: 行号（用于 id 生成）
 
     Returns:
-        HolyEval BenchItem dict，转换失败返回 None
+        mirobody-eval BenchItem dict，转换失败返回 None
     """
     row_number = row.get("Row Number", str(index + 1)).strip()
     calculator_name = row.get("Calculator Name", "").strip()
@@ -140,11 +140,11 @@ def convert(
     output_path: str | Path,
     limit: int | None = None,
 ) -> int:
-    """将 MedCalc-Bench CSV 转换为 HolyEval BenchItem JSONL
+    """将 MedCalc-Bench CSV 转换为 mirobody-eval BenchItem JSONL
 
     Args:
         input_path:    MedCalc-Bench 源 CSV 路径
-        output_path:   输出 HolyEval BenchItem JSONL 路径
+        output_path:   输出 mirobody-eval BenchItem JSONL 路径
         limit:         最大转换条数（None 表示全部）
 
     Returns:
@@ -183,7 +183,7 @@ def convert(
 def main() -> None:
     """CLI 入口"""
     parser = argparse.ArgumentParser(
-        description="将 MedCalc-Bench CSV 转换为 HolyEval BenchItem JSONL",
+        description="将 MedCalc-Bench CSV 转换为 mirobody-eval BenchItem JSONL",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
@@ -192,7 +192,7 @@ def main() -> None:
         ),
     )
     parser.add_argument("input", help="MedCalc-Bench 源 CSV 文件路径")
-    parser.add_argument("output", help="输出 HolyEval BenchItem JSONL 文件路径")
+    parser.add_argument("output", help="输出 mirobody-eval BenchItem JSONL 文件路径")
     parser.add_argument("--limit", type=int, default=None, help="最大转换条数")
     parser.add_argument("-v", "--verbose", action="store_true", help="输出详细日志")
 

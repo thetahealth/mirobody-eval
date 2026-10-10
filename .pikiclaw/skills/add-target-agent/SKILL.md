@@ -17,28 +17,25 @@ Create a new TargetAgent plugin with all required boilerplate: Pydantic config, 
 | 文件 | 操作 |
 |------|------|
 | `evaluator/plugin/target_agent/<name>_target_agent.py` | 创建新文件（plugin 实现） |
-| `evaluator/plugin/target_agent/__init__.py` | **仅追加**: 添加 import + `__all__` 条目 + docstring 映射。不得删除/修改已有内容 |
+| `evaluator/plugin/target_agent/__init__.py` | **不要改**：pkgutil 按 `_target_agent.py` 后缀自动导入，无 import 清单也无 `__all__` |
 
 ### 🟡 Schema 扩展点 — 仅限追加
 
-`evaluator/core/schema.py` 是 Pydantic Discriminated Union 的类型注册文件。由于 Pydantic v2 要求 Union 成员在定义时静态列举，新增配置类型必须在此文件中追加。
-
-**允许的操作（纯追加，不改已有代码）**：
-1. 在 `TargetInfo` Union 定义**之前**添加新的 `*TargetInfo` 配置类
-2. 在 `TargetInfo = Annotated[..., Discriminator("type")]` 中追加新类型
-3. 更新文件顶部 docstring 的 `TargetInfo` 列表
+`evaluator/core/schema.py` **不需要改**。`TargetInfo` 是
+`Annotated[Any, BeforeValidator(_validate_target_info)]`，运行时按 `type` 字段从
+`AbstractTargetAgent` 的注册表取出该插件的 `params_model`。配置类写在插件文件里，
+用 `params_model=` 注册即可。
 
 **禁止的操作**：
-- 修改任何已有的类定义（字段、默认值、validator 等）
-- 修改 Union 的构建逻辑或 Discriminator 配置
-- 修改其他 section 的任何代码（UserInfo, EvalInfo, TestCase, TestResult 等）
+- 修改 `evaluator/core/schema.py` 的任何分发逻辑
+- 修改其他插件的类定义
 
 ### 🔴 框架核心 — 严禁修改
 
 以下文件为框架核心，任何修改都可能破坏全局功能：
 
 - `evaluator/core/orchestrator.py` — 编排引擎
-- `evaluator/core/bench_schema.py` — Benchmark 数据模型（merge_target / bench_item_to_test_case 等）
+- `evaluator/core/bench_schema.py` — Benchmark 数据模型（resolve_effective_target / bench_item_to_test_case 等）
 - `evaluator/core/interfaces/abstract_*.py` — 抽象基类
 - `evaluator/utils/*.py` — 通用工具层（llm, benchmark_reader, report_reader, agent_inspector, config）
 - `benchmark/basic_runner.py` — 跑分执行器
@@ -49,8 +46,8 @@ Create a new TargetAgent plugin with all required boilerplate: Pydantic config, 
 ## Auto-Adaptation
 
 完成以下步骤后，Web UI / CLI 会自动适配新 plugin：
-- **Config Schema**: `agent_inspector` 从 `TargetInfo` Discriminated Union 自动派生 config map，无需手动维护
-- **merge_target()**: 使用 `TypeAdapter(TargetInfo)` 自动路由，新 target 类型的 per-case overrides 开箱即用
+- **Config Schema**: `agent_inspector` 从注册表里各插件的 `params_model` 自动派生 config map，无需手动维护
+- **resolve_effective_target()**: 按 `type` 走注册表分发，新 target 类型的 per-case overrides 开箱即用
 - **展示元数据**: 新 plugin 默认使用通用图标/颜色，可通过 `_display_meta` 类属性自定义（可选）
 
 ## Workflow
@@ -75,34 +72,32 @@ Ask the user (via AskUserQuestion) for the following if not provided in $ARGUMEN
 
 Before generating code, verify:
 
-- [ ] Name is unique — must NOT conflict with existing registered names. Check dynamically by reading `evaluator/plugin/target_agent/__init__.py`.
+- [ ] Name is unique — check with `python -c "import evaluator.plugin.target_agent; from evaluator.core.interfaces.abstract_target_agent import AbstractTargetAgent; print(sorted(AbstractTargetAgent.get_all()))"`
 - [ ] Name is valid snake_case identifier (lowercase, underscores only, no leading digits)
 - [ ] Config field names don't shadow Pydantic reserved names
 
-### Step 3: Modify `evaluator/core/schema.py`
+### Step 3: Define the config model **in the plugin file**
 
-Add a new Pydantic config model. Follow these rules:
+Add the Pydantic config model at the top of
+`evaluator/plugin/target_agent/<name>_target_agent.py`:
 
-- Place it in the "被测目标配置" section, **before** the `TargetInfo` definition
 - Use `model_config = ConfigDict(extra="forbid")`
-- Include `type: Literal["<name>"]` as discriminator field
+- Include `type: Literal["<name>"]`
 - Add `json_schema_extra.examples` with at least one minimal and one full example
 - Add docstring in Chinese explaining the target system
 
-Then update the `TargetInfo` union (append new type):
+Then register it with the class:
 
 ```python
-TargetInfo = Annotated[
-    ThetaApiTargetInfo | LlmApiTargetInfo | <NewTargetInfo>,
-    Discriminator("type"),
-]
+class MyTargetAgent(AbstractTargetAgent, name="my_target", params_model=MyTargetInfo):
+    ...
 ```
 
-Also update the module-level docstring's TargetInfo section to include the new target type.
+`evaluator/core/schema.py` needs no edit — it resolves the model from the registry.
 
-> **Important**: 将新类型加入 `TargetInfo` Union 后：
+> **Important**: 类上传了 `params_model=` 之后：
 > - `agent_inspector` 会自动发现其 config schema 并在 Web UI 展示
-> - `merge_target()` 会自动支持新类型的 per-case overrides 合并
+> - `resolve_effective_target()` 会自动支持新类型的 per-case overrides 合并
 > - 无需修改 `agent_inspector.py` 或 `bench_schema.py`
 
 ### Step 4: Create Implementation File
@@ -125,13 +120,14 @@ from evaluator.core.interfaces.abstract_target_agent import AbstractTargetAgent
 from evaluator.core.schema import (
     TargetAgentReaction,
     TestAgentAction,
-    <NewTargetInfo>,
 )
+
+# 配置类就定义在本文件里（见 Step 3），不要从 schema.py import
 
 logger = logging.getLogger(__name__)
 
 
-class <PascalCase>TargetAgent(AbstractTargetAgent, name="<name>"):
+class <PascalCase>TargetAgent(AbstractTargetAgent, name="<name>", params_model=<PascalCase>TargetInfo):
     """<中文一句话描述>"""
 
     # 可选：自定义 Web UI 展示元数据（不声明则使用默认图标/颜色）
@@ -143,9 +139,9 @@ class <PascalCase>TargetAgent(AbstractTargetAgent, name="<name>"):
         "est_output_tokens": 600,  # 预估单次调用输出 token
     }
 
-    def __init__(self, target_config: <NewTargetInfo>):
+    def __init__(self, target_config: <PascalCase>TargetInfo):
         super().__init__(target_config)
-        self.config: <NewTargetInfo> = target_config
+        self.config: <PascalCase>TargetInfo = target_config
         # Initialize connection state here
 
     async def _generate_next_reaction(
@@ -179,7 +175,7 @@ class <PascalCase>TargetAgent(AbstractTargetAgent, name="<name>"):
         pass
 ```
 
-Key patterns to follow (from `theta_api_target_agent.py`):
+Key patterns to follow (from `hermes_target_agent.py`):
 - **Lazy initialization**: First call can trigger auth/setup
 - **Response format**: Return `TargetAgentReaction(type="message", message_list=[{"content": "..."}])` for text responses
 - **Cleanup**: Implement `async cleanup()` if holding network connections or sessions
@@ -188,23 +184,25 @@ Key patterns to follow (from `theta_api_target_agent.py`):
 
 ### Step 5: Register Plugin
 
-Edit `evaluator/plugin/target_agent/__init__.py`:
-- Add import for the new class
-- Add class name to `__all__`
-- Update the module docstring to include the new registration mapping
+**没有手工注册这一步。** `evaluator/plugin/target_agent/__init__.py` 用 `pkgutil` 遍历本包，
+自动 import 所有文件名以 `_target_agent.py` 结尾的模块，从而触发 `__init_subclass__` 注册。
+该文件里既没有 import 清单也没有 `__all__` —— **文件名即注册**，类上传 `params_model=` 即可。
+
+> 该处的 `except ImportError: pass` 会吞掉依赖缺失，所以插件没出现时直接单独 import
+> 该模块看真实报错。模块级的 SyntaxError / NameError 不会被吞，会炸掉整个包导入。
 
 ### Step 6: Verify
 
 Run the following to verify:
 ```bash
 # 插件注册检查
-uv run python -c "import evaluator.plugin.target_agent; from evaluator.core.interfaces.abstract_target_agent import AbstractTargetAgent; print(AbstractTargetAgent.get_all())"
+uv run python -c "import evaluator.plugin.target_agent; from evaluator.core.interfaces.abstract_target_agent import AbstractTargetAgent; print(sorted(AbstractTargetAgent.get_all()))"
 
 # Web UI schema 自动发现检查
 uv run python -c "from evaluator.utils.agent_inspector import list_target_agents; print([(a.name, list(a.config_schema.get('properties', {}).keys())) for a in list_target_agents()])"
 
 # Lint
-ruff check evaluator/core/schema.py evaluator/plugin/target_agent/
+ruff check evaluator/plugin/target_agent/
 ruff format evaluator/core/schema.py evaluator/plugin/target_agent/
 ```
 
@@ -226,7 +224,7 @@ ruff format evaluator/core/schema.py evaluator/plugin/target_agent/
 新 plugin 默认使用灰色图标和空特性标签。若需自定义 Web UI 展示，在 plugin 类上声明 `_display_meta`:
 
 ```python
-class <PascalCase>TargetAgent(AbstractTargetAgent, name="<name>"):
+class <PascalCase>TargetAgent(AbstractTargetAgent, name="<name>", params_model=<PascalCase>TargetInfo):
     _display_meta = {
         "icon": "M5.25 14.25h13.5m...",  # heroicons SVG path (24x24 viewBox)
         "color": "#6366f1",               # CSS 颜色值
@@ -244,7 +242,7 @@ class <PascalCase>TargetAgent(AbstractTargetAgent, name="<name>"):
 ```
 
 - LLM 类 target（如 `llm_api`）：声明合理的 token 估算值
-- 外部 API 类 target（如 `theta_api`）：token 填 0（不按 token 计费）
+- 外部 API 类 target（如 `hermes`）：token 填 0（不按 token 计费）
 
 `_display_meta` 和 `_cost_meta` 中的字段均为可选，未指定的使用默认值。
 
@@ -252,8 +250,13 @@ class <PascalCase>TargetAgent(AbstractTargetAgent, name="<name>"):
 
 | Name | Config | File | Description |
 |------|--------|------|-------------|
-| `theta_api` | `ThetaApiTargetInfo` | `theta_api_target_agent.py` | Theta Health HTTP API (email auth, polling-based chat) |
 | `llm_api` | `LlmApiTargetInfo` | `llm_api_target_agent.py` | Generic LLM API (OpenAI/Gemini via do_execute) |
+| `hermes` | `HermesTargetInfo` | `hermes_target_agent.py` | External HTTP service (own session/token handling) |
+| `evermem` | `EvermemTargetInfo` | `evermem_target_agent.py` | EverMem memory service |
+| `mem0_rag_api` | `Mem0RagApiTargetInfo` | `mem0_rag_api_target_agent.py` | Mem0 RAG service |
+| `naive_rag_api` | `NaiveRagApiTargetInfo` | `naive_rag_api_target_agent.py` | Baseline RAG |
+| `hippo_rag_api` | `HippoRagApiTargetInfo` | `hippo_rag_api_target_agent.py` | HippoRAG service |
+| `dyg_rag_api` | `DygRagApiTargetInfo` | `dyg_rag_api_target_agent.py` | DyG-GraphRAG service |
 
 ## TargetAgentReaction Types
 

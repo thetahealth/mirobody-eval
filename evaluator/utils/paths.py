@@ -44,6 +44,34 @@ def user_data_dir(bench: str) -> Path:
     return (Path(env) / bench) if env else (_REPO_ROOT / "benchmark" / "data" / bench / ".data")
 
 
+#: Question banks fetched from the dataset host, kept under the batch they came
+#: from: `<user_data_dir>/_banks/<batch>/<dataset>.jsonl`. The batch stays in the
+#: path on purpose — it is what lets a score be anchored to that batch's manifest
+#: checksum without a second "dataset → batch" index to keep in step.
+#:
+#: Both the writer (`generator.eslbench.prepare_data`) and the reader
+#: (`evaluator.utils.benchmark_reader`) import this rather than spelling the
+#: directory twice; a literal in two places is how the two halves drift.
+BANKS_DIRNAME = "_banks"
+
+
+def fetched_bank(bench: str, dataset: str) -> tuple[Path, str] | None:
+    """The fetched question bank for *dataset*, and the batch it came from.
+
+    Returns None when nothing was fetched for it — the caller then falls back to
+    the copy vendored in the repo, which still works offline but cannot say which
+    release it corresponds to.
+    """
+    root = user_data_dir(bench) / BANKS_DIRNAME
+    if not root.is_dir():
+        return None
+    for batch_dir in sorted(root.iterdir(), reverse=True):
+        candidate = batch_dir / f"{dataset}.jsonl"
+        if candidate.is_file():
+            return candidate, batch_dir.name
+    return None
+
+
 def log_resolved_paths() -> None:
     """启动横幅 — 打印两个 env 的解析结果，便于排查 PVC / .env 配置问题。"""
     rep = report_dir()

@@ -46,7 +46,7 @@ def create_app() -> FastAPI:
             traces_sample_rate=1.0,
         )
 
-    app = FastAPI(title="HolyEval Web UI", lifespan=lifespan)
+    app = FastAPI(title="mirobody-eval Web UI", lifespan=lifespan)
 
     # Static files
     app.mount("/static", StaticFiles(directory=str(_WEB_DIR / "static")), name="static")

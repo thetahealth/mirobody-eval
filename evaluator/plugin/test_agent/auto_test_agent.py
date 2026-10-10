@@ -153,9 +153,18 @@ class AutoTestAgent(AbstractTestAgent, name="auto"):
         "features": ["LLM-driven", "Autonomous", "Smart Convergence"],
     }
 
-    def __init__(self, user_info: AutoUserInfo, model: str = "gpt-4.1", **kwargs):
+    #: Used when neither the case nor the CLI names a model. Kept as a bare
+    #: `gpt-*` name to match the documented setup (`.env.example` requires
+    #: OPENAI_API_KEY); point `user.model` elsewhere to use another provider.
+    DEFAULT_MODEL = "gpt-4.1"
+
+    def __init__(self, user_info: AutoUserInfo, model: str | None = None, **kwargs):
         super().__init__(user_info, **kwargs)
-        self.model = model
+        # Case config wins over the constructor argument: `_create_test_agent`
+        # instantiates every TestAgent as `cls(user, history=...)` and passes no
+        # model, so a constructor default alone was unreachable from data or CLI
+        # — which pinned every auto-mode dataset to one provider.
+        self.model = getattr(user_info, "model", None) or model or self.DEFAULT_MODEL
         self.system_prompt = self._build_system_prompt()
         # Cost tracking (using langchain UsageMetadata)
         self._cost = UsageMetadata(input_tokens=0, output_tokens=0, total_tokens=0)

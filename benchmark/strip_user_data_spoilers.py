@@ -1,6 +1,6 @@
 """
 Strip "answer-key" fields from user JSON files so LLM tools (which read JSON)
-see the same information as theta backend (which reads user.duckdb).
+see the same information as the backend under test (which reads user.duckdb).
 
 DuckDB exam_indicators schema is: user_id, time, indicator, exam_type,
 exam_location, value, unit. Anything richer in JSON is a spoiler.
@@ -19,8 +19,7 @@ Stripped fields (per-exam):
 Operates on:
   - benchmark/data/eslbench/.data/userXXX_AT_demo/exam_data.json (the source
     LLM agents actually read in production runs)
-  - Optionally also benchmark/data/medhall/data/202605/userXXX_AT_demo/* if
-    those exist (HF staging copies)
+  - Any additional staging copies of the same user directories, if present
 
 Idempotent — running twice is safe.
 

@@ -13,7 +13,7 @@ Each line is a JSON object corresponding to a `BenchItem` (automatically convert
 ```json
 {
   "id": "case_001",
-  "name": "Example case",
+  "title": "Example case",
   "tags": ["topic:cardiology"],
   "user": {
     "type": "manual",
@@ -34,7 +34,7 @@ Each line is a JSON object corresponding to a `BenchItem` (automatically convert
 |------|------|
 | `user.type` | `manual` (script-driven) or `auto` (LLM-driven) |
 | `user.strict_inputs` | Preset input list (`List[str]`), sent sequentially to the system under test in manual mode. Single item = single-turn Q&A; multiple items = sequential context injection before the final question (e.g., send medical records first, then ask for diagnosis), intermediate responses do not affect evaluation |
-| `eval.evaluator` | Evaluator type (`semantic` / `keyword` / `healthbench` / `medcalc` / `preset_answer`) |
+| `eval.evaluator` | Evaluator type (`semantic` / `rubric` / `healthbench` / `medcalc` / `kg_qa` / `record_retrieval` / `dialogue_quality` / `engagement`) |
 | `history` | Optional, pre-evaluation conversation history `[{role, content}]`. Unlike `strict_inputs`: history is injected directly as preloaded context without going through the conversation loop |
 
 ## Converting from External Datasets
@@ -43,12 +43,12 @@ Each line is a JSON object corresponding to a `BenchItem` (automatically convert
 
 | Converter | Command | Description |
 |--------|------|------|
-| HealthBench | `python -m generator.healthbench.converter input.jsonl output.jsonl --target-model gpt-4.1` | prompt -> history + strict_inputs, rubrics -> eval.rubrics |
-| MedCalc-Bench | `python -m generator.medcalc.converter` | Patient Note + Question -> strict_inputs, Answer -> eval.ground_truth |
-| AgentClinic | `python -m generator.agentclinic.converter input.jsonl output.jsonl` | OSCE/MCQ two formats -> strict_inputs, Correct_Diagnosis -> eval.standard_answer (keyword matching) |
-| MedHall (generation) | `python -m generator.medhall.data_gen --count 15 --output raw_data.jsonl` | GPT-4o batch generation of factual/contextual/citation hallucination scenarios |
-| MedHall (conversion) | `python -m generator.medhall.converter raw_data.jsonl benchmark/data/medhall/theta.jsonl` | Hallucination scenario raw JSONL -> BenchItem JSONL, uses hallucination evaluator |
-| MemoryArena | `python -m generator.memoryarena.converter` | questions -> strict_inputs, answers -> eval.ground_truths, domain -> tags |
+| HealthBench | `python -m generator.healthbench.converter input.jsonl output.jsonl` | prompt -> history + strict_inputs, rubrics -> eval.rubrics |
+| MedCalc-Bench | `python -m generator.medcalc.converter input.csv output.jsonl` | Patient Note + Question -> strict_inputs, Answer -> eval.ground_truth |
+| ESL-Bench (data prep) | `python -m generator.eslbench.prepare_data` | Downloads the synthetic health-KG data from HuggingFace and builds a per-user DuckDB index (`--force` to rebuild) |
+| Virtual User (personas) | `python -m generator.virtual_user profile_gen --count 20` | LLM-generated patient personas -> `profiles.jsonl` |
+| Virtual User (cases) | `python -m generator.virtual_user case_gen --seed 42 --output <new>.jsonl` | personas x opening lines -> BenchItem JSONL. **Without `--output` it overwrites the shipped `round1.jsonl`.** |
+| Virtual User (analysis) | `python -m generator.virtual_user analyzer report.json` | Aggregates a finished report by opening line / adversarial dimension |
 
 ### Custom Converters
 
@@ -74,12 +74,12 @@ benchmark/
 │   │   ├── full.jsonl
 │   │   ├── sample.jsonl
 │   │   └── metadata.json
-│   ├── extraction/
-│   │   ├── simple.jsonl
+│   ├── virtual_user/
+│   │   ├── round1.jsonl
 │   │   └── metadata.json
-│   └── memoryarena/
-│       ├── full.jsonl
-│       ├── sample.jsonl
+│   └── eslbench/
+│       ├── sample50-20260331.jsonl
+│       ├── full-20260331.jsonl
 │       └── metadata.json
 └── report/                   # Report output (auto-generated)
 ```
@@ -93,7 +93,7 @@ Each benchmark suite directory contains a `metadata.json` that provides metadata
   "description": "# Benchmark Suite Name\n\nBrief description...\n\n## Subsets\n\n| Subset | Count | Description |\n|------|------|------|\n| sample | 100 | Quick validation |\n\n**Evaluator**: `evaluator_name`",
   "target": {
     "type": "llm_api",
-    "model": "gpt-4.1"
+    "model": "gpt-5.4-mini"
   },
   "target_configurable": true
 }
@@ -103,13 +103,13 @@ Each benchmark suite directory contains a `metadata.json` that provides metadata
 |------|------|
 | `description` | Markdown-formatted suite description, displayed in Web UI |
 | `target` | Default target configuration, used as initial values when creating tasks in Web UI / CLI |
-| `target_configurable` | `true` allows users to modify target parameters, `false` locks them (e.g., extraction is fixed to theta_api) |
+| `target_configurable` | `true` allows users to modify target parameters, `false` locks them (e.g., a suite pinned to one target type) |
 
 ## Validating Data
 
 ```bash
 # Run a few cases for quick validation
-python -m benchmark.basic_runner <benchmark> <dataset> --target-type llm_api --target-model gpt-4.1 --limit 5 -v
+python -m benchmark.basic_runner <benchmark> <dataset> --target-type llm_api --target-model gpt-5.4-mini --limit 5 -v
 ```
 
 Or execute via the Web UI: start `python -m web`, create a task at http://localhost:8000/tasks, and view progress in real time.

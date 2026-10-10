@@ -523,12 +523,7 @@ class TaskManager:
             if entry.eval_results:
                 sbt = _compute_test_result_tag_stats(entry.eval_results)
                 snap["stats_by_tag"] = sbt
-                # report_summary — hma-web depends on this field to determine evaluation completion
-                all_scores = [r.eval.score for r in entry.eval_results]
-                snap["report_summary"] = {
-                    "avg_score": sum(all_scores) / len(all_scores) if all_scores else 0.0,
-                    "stats_by_tag": {tag: {"avg_score": s["avg_score"], "count": s["total"]} for tag, s in sbt.items()},
-                }
+                snap["report_summary"] = _build_report_summary(entry.eval_results, sbt)
             elif entry.report_path:
                 stats_by_tag, report_summary = _load_report_summary(entry.report_path)
                 snap["stats_by_tag"] = stats_by_tag
@@ -712,12 +707,17 @@ def _compute_snapshot_tag_stats(cases: dict[str, dict]) -> dict[str, dict]:
     for tag, items in tag_data.items():
         tag_pass = sum(1 for i in items if i.get("eval_result") == "pass")
         tag_fail = sum(1 for i in items if i.get("eval_result") == "fail")
+        tag_error = sum(1 for i in items if i.get("eval_result") == "error")
         tag_judged = tag_pass + tag_fail
-        scores = [i["score"] for i in items if i.get("score") is not None]
+        # 与 bench_schema.compute_stats_by_tag 同一口径:没判成分的用例不进平均分。
+        # 这里输入是快照 dict 而不是 TestResult，所以只能重述规则、不能直接调它 ——
+        # 但进行中的数字和跑完后的报告必须一致，否则同一个批次会在跑完那一刻跳变。
+        scores = [i["score"] for i in items if i.get("score") is not None and i.get("eval_result") != "error"]
         stats[tag] = {
             "total": len(items),
             "pass_count": tag_pass,
             "fail_count": tag_fail,
+            "error_count": tag_error,
             "pass_rate": tag_pass / tag_judged if tag_judged else 0.0,
             "avg_score": sum(scores) / len(scores) if scores else 0.0,
         }
@@ -725,25 +725,16 @@ def _compute_snapshot_tag_stats(cases: dict[str, dict]) -> dict[str, dict]:
 
 
 def _compute_test_result_tag_stats(results: list[TestResult]) -> dict[str, dict]:
-    """Compute tag-grouped statistics from TestResult list"""
-    tag_data: dict[str, list[TestResult]] = {}
-    for result in results:
-        for tag in result.tags:
-            tag_data.setdefault(tag, []).append(result)
+    """Compute tag-grouped statistics from TestResult list.
 
-    stats: dict[str, dict] = {}
-    for tag, items in tag_data.items():
-        tag_pass = sum(1 for item in items if item.eval.result == "pass")
-        tag_fail = sum(1 for item in items if item.eval.result == "fail")
-        tag_judged = tag_pass + tag_fail
-        stats[tag] = {
-            "total": len(items),
-            "pass_count": tag_pass,
-            "fail_count": tag_fail,
-            "pass_rate": tag_pass / tag_judged if tag_judged else 0.0,
-            "avg_score": sum(item.eval.score for item in items) / len(items) if items else 0.0,
-        }
-    return stats
+    Delegates to `evaluator.core.bench_schema.compute_stats_by_tag`: the same
+    numbers are shown on a report page and printed by the CLI, and they came
+    from two separate implementations of the same loop. A tag's average score
+    must not depend on which one you are looking at.
+    """
+    from evaluator.core.bench_schema import compute_stats_by_tag
+
+    return compute_stats_by_tag(results)
 
 
 def _load_report_cases(report_path: str | None) -> tuple[dict[str, dict], int | None, dict | None]:
@@ -780,6 +771,25 @@ def _load_report_cases(report_path: str | None) -> tuple[dict[str, dict], int | 
     return cases, max_concurrency, runtime_target
 
 
+def _build_report_summary(results: list[TestResult], stats_by_tag: dict[str, dict]) -> dict[str, Any]:
+    """Use the same score denominator for in-memory and saved task summaries."""
+    graded = [r for r in results if r.eval.result != "error"]
+    return {
+        "avg_score": sum(r.eval.score for r in graded) / len(graded) if graded else 0.0,
+        "graded_count": len(graded),
+        "error_count": len(results) - len(graded),
+        "stats_by_tag": {
+            tag: {
+                "avg_score": value["avg_score"],
+                "count": value["total"],
+                "graded_count": value["total"] - value["error_count"],
+                "error_count": value["error_count"],
+            }
+            for tag, value in stats_by_tag.items()
+        },
+    }
+
+
 def _load_report_summary(report_path: str | None) -> tuple[dict[str, dict], dict[str, Any] | None]:
     """Read stats_by_tag / report_summary from report file as fallback when not in memory"""
     if not report_path:
@@ -788,29 +798,14 @@ def _load_report_summary(report_path: str | None) -> tuple[dict[str, dict], dict
     try:
         with open(report_path, "r", encoding="utf-8") as f:
             report_data = json.load(f)
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        results = [TestResult.model_validate(case) for case in report_data["cases"]]
+    except (OSError, ValueError, KeyError, TypeError):
         return {}, None
 
-    raw_stats = report_data.get("stats_by_tag")
-    if not isinstance(raw_stats, dict):
-        return {}, None
-
-    stats_by_tag = {
-        str(tag): value
-        for tag, value in raw_stats.items()
-        if isinstance(value, dict)
-    }
-    report_summary = {
-        "avg_score": float(report_data.get("avg_score") or 0.0),
-        "stats_by_tag": {
-            tag: {
-                "avg_score": float(value.get("avg_score") or 0.0),
-                "count": int(value.get("total") or value.get("count") or 0),
-            }
-            for tag, value in stats_by_tag.items()
-        },
-    }
-    return stats_by_tag, report_summary
+    # Case results also let reports saved before error_count existed use the
+    # current denominator, without rewriting the original report file.
+    stats_by_tag = _compute_test_result_tag_stats(results)
+    return stats_by_tag, _build_report_summary(results, stats_by_tag)
 
 
     # Note: live file functions have been moved to evaluator/utils/live_files.py

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Run Eval - HolyEval{% endblock %}
+{% block title %}Run Eval - mirobody-eval{% endblock %}
 
 {% block content %}
 <div x-data="taskManager()" x-init="init()">
@@ -57,10 +57,14 @@
                         </button>
                         <div x-show="open" x-transition.opacity class="sh-select-content w-max min-w-full">
                             <template x-for="d in datasets" :key="d.name">
-                                <div @click="form.dataset = d.name; onDatasetChange(); open = false"
-                                     class="sh-select-item whitespace-nowrap" :class="form.dataset === d.name && 'selected'">
+                                <div @click="if (!d.unavailable_reason) { form.dataset = d.name; onDatasetChange(); open = false }"
+                                     class="sh-select-item whitespace-nowrap"
+                                     :class="[form.dataset === d.name && 'selected', d.unavailable_reason && 'opacity-50 cursor-not-allowed']"
+                                     :title="d.unavailable_reason || ''">
                                     <span x-text="d.name"></span>
-                                    <span class="ml-auto text-xs text-muted-foreground tabular-nums" x-text="datasetHint(d)"></span>
+                                    <span class="ml-auto text-xs tabular-nums"
+                                          :class="d.unavailable_reason ? 'text-muted-foreground/70 italic' : 'text-muted-foreground'"
+                                          x-text="d.unavailable_reason || datasetHint(d)"></span>
                                 </div>
                             </template>
                             <div x-show="datasets.length === 0" class="sh-select-item text-muted-foreground">Select a benchmark first</div>
@@ -186,13 +190,29 @@
                                             </div>
                                         </div>
                                     </template>
-                                    <!-- Editable + String → text input -->
+                                    <!-- Editable + String → text input.
+                                         A field may carry `suggestions` (JSON Schema
+                                         `examples`) without being closed like an enum —
+                                         the model name is the case: it has to accept any
+                                         id a provider offers, so it cannot be a dropdown,
+                                         but typed from memory it is guesswork. A datalist
+                                         gives the picker back without closing the field. -->
                                     <template x-if="field.editable && !field.enum">
-                                        <input type="text"
-                                               :value="targetValues[field.name] || ''"
-                                               @input="targetValues[field.name] = $event.target.value"
-                                               :placeholder="field.default || ''"
-                                               class="sh-input">
+                                        <div>
+                                            <input type="text"
+                                                   :value="targetValues[field.name] || ''"
+                                                   @input="targetValues[field.name] = $event.target.value"
+                                                   :placeholder="field.default || ''"
+                                                   :list="field.suggestions ? 'sugg-' + field.name : null"
+                                                   class="sh-input">
+                                            <template x-if="field.suggestions">
+                                                <datalist :id="'sugg-' + field.name">
+                                                    <template x-for="opt in field.suggestions" :key="opt">
+                                                        <option :value="opt"></option>
+                                                    </template>
+                                                </datalist>
+                                            </template>
+                                        </div>
                                     </template>
                                 </div>
                             </template>
@@ -640,6 +660,7 @@ function taskManager() {
                     description: agentField.description || '',
                     required: fieldSpec.required ?? false,
                     enum: agentField.enum || null,
+                    suggestions: agentField.suggestions || null,
                     default: fieldSpec.default ?? agentField.default ?? null,
                     editable: fieldSpec.editable ?? true,
                 });
@@ -746,6 +767,11 @@ function taskManager() {
                         description: prop.description || '',
                         required: required.has(name),
                         enum: enumValues,
+                        // JSON Schema `examples` — suggestions for a field that stays
+                        // open. `model` moved from a 24-entry Literal to a plain string
+                        // so provider-prefixed ids (`dashscope:qwen3.5-flash`) validate;
+                        // without this the picker it used to have becomes a bare box.
+                        suggestions: prop.examples || null,
                         default: prop.default ?? null,
                     });
                 }

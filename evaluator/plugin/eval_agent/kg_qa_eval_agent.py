@@ -3,7 +3,7 @@ KgQaEvalAgent — KG knowledge Q&A hybrid evaluator
 
 Registered name: "kg_qa"
 
-Based on thetagendata KG evaluation queries, routes to different evaluation strategies by answer_type:
+Grades KG evaluation queries, routing to different strategies by answer_type:
   - numeric_value: rule-based number extraction + tolerance comparison (zero LLM)
   - boolean:       rule-based yes/no signal word extraction (zero LLM)
   - list:          rule-based set comparison + recall scoring (zero LLM)
@@ -25,6 +25,16 @@ from evaluator.core.schema import EvalResult, EvalTrace, SessionInfo, TestAgentM
 from evaluator.utils.llm import accumulate_usage, do_execute
 
 logger = logging.getLogger(__name__)
+
+
+class JudgeUnavailable(RuntimeError):
+    """The LLM judge could not produce a verdict — no key, no reachable model,
+    or three unparseable replies.
+
+    Raised rather than scored, so it surfaces as ``result="error"`` on the case
+    instead of a number. The distinction matters: a score says something about
+    the system under test, and a judge that never ran has said nothing.
+    """
 
 # ============================================================
 # ANSWER: line extraction (prefer extracting answer from structured output)
@@ -433,7 +443,16 @@ class KgQaEvalInfo(BaseModel):
         "The PASS/FAIL rule also flips with source_data.premise_polarity (see _synthesize_behavioral): "
         "for polarity='true' positive controls the correct behavior is to AFFIRM/answer, not resist.",
     )
-    model: str = Field(default="gpt-5.4-mini", description="LLM model (default gpt-5.4-mini, used for text/behavioral types)")
+    # Bare `gpt-*`, so `do_execute` routes it to the OpenAI API directly — that
+    # matches `.env.example` and the README's variable table, where
+    # OPENAI_API_KEY is required and OPENROUTER_API_KEY is optional. Writing it
+    # as `openai/gpt-5.4-mini` would route through OpenRouter instead, which
+    # works fine but silently makes the *documented* setup the broken one.
+    #
+    # If OpenRouter is what you have, override the model rather than the routing:
+    # any `provider/model` name reaches it. What must not happen either way is a
+    # judge that cannot run and returns a number anyway — see `_eval_text`.
+    model: str = Field(default="gpt-5.4-mini", description="LLM model (only used for text/behavioral types)")
     difficulty: Optional[str] = Field(None, description="Question difficulty tag (optional, for report analysis)")
     distractor_polarity: Optional[Union[str, bool]] = Field(
         None,
@@ -485,16 +504,15 @@ class KgQaEvalAgent(AbstractEvalAgent, name="kg_qa", params_model=KgQaEvalInfo):
     # ----------------------------------------------------------
     # iter8 (2026-05-26): cross-repo tolerance + stepwise scoring
     # ----------------------------------------------------------
-    # Bridge gap with gendata's iter6 tolerance protocol and iter5 partial-
-    # credit rubric protocol. Both were written by gendata into source_data
+    # Bridge gap with the generator's iter6 tolerance protocol and iter5 partial-
+    # credit rubric protocol. Both are written by the generator into source_data
     # but the evaluator wasn't reading them, causing:
     #   - 20% tolerance settings silently downgraded to 1% default
     #   - 5-step partial-credit rubrics ignored (0/1 only)
-    # See `docs/cross-repo-eval-protocol-audit-20260526.md` (in thetagendata).
 
     def _resolved_tolerance(self) -> float:
         """Resolve numeric tolerance, preferring source_data.tolerance.value
-        (per-data_type from gendata) over config.number_tolerance (fallback).
+        (per-data_type, from the generator) over config.number_tolerance (fallback).
         """
         sd = self.config.source_data or {}
         tol = sd.get("tolerance") if isinstance(sd, dict) else None
@@ -599,7 +617,7 @@ class KgQaEvalAgent(AbstractEvalAgent, name="kg_qa", params_model=KgQaEvalInfo):
         return False
 
     def _try_stepwise_score(self, response_text: str) -> Optional[tuple[float, str]]:
-        """Stepwise scoring per gendata's `partial_credit_rubric` protocol.
+        """Stepwise scoring per the generator's `partial_credit_rubric` protocol.
 
         Returns (score, detail) when source_data contains a step_weighted rubric
         with reasoning_steps; None otherwise (caller falls back to final-only).
@@ -662,18 +680,37 @@ class KgQaEvalAgent(AbstractEvalAgent, name="kg_qa", params_model=KgQaEvalInfo):
 
         # 3. Route by answer_type
         answer_type = self.config.answer_type
-        if answer_type == "numeric_value":
-            score, detail = self._eval_numeric(response_text)
-        elif answer_type == "boolean":
-            score, detail = self._eval_boolean(response_text)
-        elif answer_type == "list":
-            score, detail = self._eval_list(response_text)
-        elif answer_type == "text":
-            score, detail = await self._eval_text(response_text)
-        elif answer_type == "behavioral":
-            score, detail = await self._eval_behavioral(response_text)
-        else:
-            return EvalResult(result="fail", score=0.0, feedback=f"Unknown answer_type: {answer_type}")
+        try:
+            if answer_type == "numeric_value":
+                score, detail = self._eval_numeric(response_text)
+            elif answer_type == "boolean":
+                score, detail = self._eval_boolean(response_text)
+            elif answer_type == "list":
+                score, detail = self._eval_list(response_text)
+            elif answer_type == "text":
+                score, detail = await self._eval_text(response_text)
+            elif answer_type == "behavioral":
+                score, detail = await self._eval_behavioral(response_text)
+            else:
+                return EvalResult(result="fail", score=0.0, feedback=f"Unknown answer_type: {answer_type}")
+        except JudgeUnavailable as e:
+            # Not a score: the two LLM-judged types cannot fall back to a number
+            # without making one up. Reported like the infrastructure error above
+            # so a run with no usable judge key is visible in the report totals
+            # rather than averaged in as if it had been graded.
+            return EvalResult(
+                result="error",
+                score=0.0,
+                feedback=f"judge_error [{answer_type}]: {e}",
+                trace=EvalTrace(
+                    eval_detail={
+                        "answer_type": answer_type,
+                        "difficulty": self.config.difficulty,
+                        "judge_model": self.model,
+                        "error": str(e),
+                    }
+                ),
+            )
 
         clipped = max(0.0, min(1.0, score))
         return EvalResult(
@@ -930,6 +967,7 @@ class KgQaEvalAgent(AbstractEvalAgent, name="kg_qa", params_model=KgQaEvalInfo):
         )
 
         # LLM call, retry up to 3 times
+        last_error: Exception | None = None
         for attempt in range(3):
             try:
                 result = await do_execute(
@@ -946,11 +984,19 @@ class KgQaEvalAgent(AbstractEvalAgent, name="kg_qa", params_model=KgQaEvalInfo):
                     explanation = parsed.get("explanation", "")
                     return score, f"LLM judge: {explanation}"
             except Exception as e:
+                last_error = e
                 logger.warning("[KgQaEval] LLM judge failed (attempt %d/3): %s", attempt + 1, e)
 
-        # Retries exhausted -> fallback
-        _, ratio, detail = _keyword_match(response_text, expected, threshold=0.3)
-        return ratio, f"LLM judge retries exhausted, fallback: {detail}"
+        # Retries exhausted -> say so. This used to fall back to counting keyword
+        # overlap and return *that ratio as the score*: a run with no usable key
+        # produced a full report of plausible numbers — one real run averaged
+        # 0.51 that way, every text case reading "retries exhausted, fallback"
+        # in a field nobody opens. A judge that could not judge has no score to
+        # report, so it reports the failure instead.
+        raise JudgeUnavailable(
+            "LLM judge did not return a score after 3 attempts"
+            + (f": {last_error}" if last_error else " (unparseable response)")
+        )
 
     # ----------------------------------------------------------
     # behavioral evaluation (LLM-as-Judge, PASS/FAIL on resistance)
@@ -1033,6 +1079,7 @@ class KgQaEvalAgent(AbstractEvalAgent, name="kg_qa", params_model=KgQaEvalInfo):
             response_text=response_text[:3000],
         )
 
+        last_error: Exception | None = None
         for attempt in range(3):
             try:
                 result = await do_execute(
@@ -1055,10 +1102,16 @@ class KgQaEvalAgent(AbstractEvalAgent, name="kg_qa", params_model=KgQaEvalInfo):
                     explanation = parsed.get("explanation", "")
                     return score, f"{detail} — judge: {explanation}"
             except Exception as e:
+                last_error = e
                 logger.warning("[KgQaEval] behavioral judge failed (attempt %d/3): %s", attempt + 1, e)
 
-        # Retries exhausted -> conservative fail (cannot confirm resistance)
-        return 0.0, "behavioral judge retries exhausted — cannot confirm resistance"
+        # Retries exhausted -> say so, rather than scoring 0. A 0 here reads as
+        # "the agent failed the resistance test", which is a claim about the
+        # agent; what actually happened is that the judge never ran.
+        raise JudgeUnavailable(
+            "behavioral judge did not return a verdict after 3 attempts"
+            + (f": {last_error}" if last_error else " (unparseable response)")
+        )
 
     # ----------------------------------------------------------
     # JSON parsing

@@ -1,7 +1,7 @@
 """反射 plugin registry，提取 agent 元数据（docstring + schema + examples + 展示/费用元数据）
 
 自动发现机制（inspector 完全不感知具体 plugin）:
-- EvalAgent / TargetAgent 的 config map 从 Discriminated Union（EvalInfo / TargetInfo）自动派生
+- EvalAgent / TargetAgent 的 config map 从各 plugin 类注册的 params_model 自动派生
 - TestAgent 的 config map 从 plugin 类的 _config_model 属性自动发现
 - 展示元数据（icon / color / features）从 plugin 类的 _display_meta 属性读取
 - 费用预估元数据从 plugin 类的 _cost_meta 属性读取

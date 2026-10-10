@@ -1169,7 +1169,6 @@ async def extract_events(
     
     if config.if_wri_ents:
         try:
-            import datetime
             with open('debug.txt', 'a', encoding='utf-8') as f:
                 f.write(f"\n=== EXTRACTED EVENTS DEBUG INFO ({datetime.datetime.now()}) ===\n")
                 f.write(f"Total extracted events: {len(all_events_data)}\n\n")

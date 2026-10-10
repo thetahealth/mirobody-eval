@@ -14,7 +14,6 @@ GUIDE_LIST = [
     {"name": "develop-eval-agent", "title": "Build EvalAgent"},
     {"name": "develop-target-agent", "title": "Build TargetAgent"},
     {"name": "generate-benchmark", "title": "Gen Benchmark"},
-    {"name": "e2e-test", "title": "E2E Test"},
     {"name": "run-benchmark", "title": "Run Benchmark"},
 ]
 

@@ -308,7 +308,7 @@ class NaiveRagApiTargetInfo(BaseModel):
         "z-ai/glm-5.1",
     ] = Field(description="生成模型名称")
     embedding_model: str = Field("text-embedding-3-large", description="嵌入模型")
-    data_group: str = Field(description="数据目录（benchmark 名称，如 'thetagen'）")
+    data_group: str = Field(description="数据目录（benchmark 名称，如 'eslbench'）")
     user_email: Optional[str] = Field(None, description="用户邮箱（映射到 .data/{user_dir}/）")
     top_k: int = Field(10, description="检索 top-k 文档数量", ge=1, le=50)
     system_prompt: Optional[str] = Field(None, description="自定义系统提示词")

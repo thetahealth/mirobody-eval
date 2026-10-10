@@ -1,14 +1,7 @@
 {
-  "description": "# 虚拟用户开场白测试\n\n用 LLM 生成的虚拟肥胖患者测试不同开场白的用户参与率。\n\n## 评估指标\n\n- **主动录入率** (pass_rate): engaged / total\n- **按开场白分组**: 通过 tags `opening:XX` 聚合\n- **按对抗维度交叉分析**: 通过 tags `disclosure:XX` 等聚合\n\n## 使用流程\n\n```bash\n# 1. 生成画像\npython -m generator.virtual_user.profile_gen --count 20\n\n# 2. 生成用例\npython -m generator.virtual_user.case_gen\n\n# 3. 跑测试\npython -m benchmark.basic_runner virtual_user round1 --target-type theta_smart_api -p 5\n\n# 4. 分析报告\npython -m generator.virtual_user.analyzer benchmark/report/virtual_user/round1_xxx.json\n```",
+  "description": "# 虚拟用户开场白测试\n\n用 LLM 生成的虚拟肥胖患者测试不同开场白的用户参与率。\n\n## 评估指标\n\n- **主动录入率** (pass_rate): engaged / total\n- **按开场白分组**: 通过 tags `opening:XX` 聚合\n- **按对抗维度交叉分析**: 通过 tags `disclosure:XX` 等聚合\n\n## 使用流程\n\n```bash\n# 1. 生成画像\npython -m generator.virtual_user.profile_gen --count 20\n\n# 2. 生成用例\npython -m generator.virtual_user.case_gen\n\n# 3. 跑测试\npython -m benchmark.basic_runner virtual_user round1 --target-type llm_api -p 5\n\n# 4. 分析报告\npython -m generator.virtual_user.analyzer benchmark/report/virtual_user/round1_xxx.json\n```",
   "target": [
-    {
-      "type": "theta_smart_api",
-      "fields": {
-        "email": {"default": "user1@demo", "editable": true},
-        "agent": {"default": "expert", "editable": true}
-      }
-    },
-    {
+        {
       "type": "llm_api",
       "fields": {
         "model": {"default": "gpt-4.1", "editable": true, "required": true}

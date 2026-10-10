@@ -24,7 +24,7 @@ AI Agent 框架，通过 gateway 暴露 OpenAI 兼容的 /v1/chat/completions �
 模型探测:
     启动时通过 GET /v1/models 自动探测 Hermes 当前配置的模型名。
     用户在 Hermes 侧通过 `hermes model` 或修改 ~/.hermes/config.yaml 切换模型后，
-    下一次创建 HermesTargetAgent 实例会自动读取到新模型名，无需修改 HolyEval 配置。
+    下一次创建 HermesTargetAgent 实例会自动读取到新模型名，无需修改 mirobody-eval 配置。
 
 前置依赖:
     1. 安装 Hermes: curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash

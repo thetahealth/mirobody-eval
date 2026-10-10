@@ -131,7 +131,7 @@ class RecordRetrievalEvalAgent(
     def _extract_turn_data(memory_list: List[TestAgentMemory]) -> tuple[List[str], List[Optional[float]]]:
         """Extract per-turn AI response text and latency (seconds).
 
-        Latency 优先使用 annotation timestamp（theta_smart_api 的 annotation 早于完整 reply，
+        Latency 优先使用 annotation timestamp（某些 target 的 annotation 早于完整 reply，
         更准确地反映用户感知到的确认时间）。无 annotation 时回退到完整响应时间。
         """
         responses = []

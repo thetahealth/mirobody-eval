@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+.ruff_cache/
 *.py[cod]
 *$py.class
 *.so
@@ -46,8 +47,6 @@ htmlcov/
 # Environment
 .env
 .env.local
-# GUI Agent 运行产物
-scripts/gui_agent/gui_agent_runs/
 # Claude Code
 .claude/settings.local.json
 .claude/holyeval_claude_bak/

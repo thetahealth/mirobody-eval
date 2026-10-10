@@ -1,5 +1,5 @@
 /* ============================================
-   HolyEval — shadcn/ui design tokens (CSS vars)
+   mirobody-eval — shadcn/ui design tokens (CSS vars)
    ============================================ */
 
 :root {
@@ -247,6 +247,18 @@
 .badge-destructive { background-color: var(--destructive); color: var(--destructive-foreground); }
 .badge-scored { background-color: #dbeafe; color: #1e40af; }
 :is(.dark) .badge-scored { background-color: rgba(59, 130, 246, 0.2); color: #93bbfd; }
+/* `error` — the case never got graded (timeout, judge outage, cancelled).
+   Deliberately amber rather than `badge-destructive`: red is what a failed
+   answer wears, and these are not failed answers — reusing it would put back
+   the very confusion the state exists to remove. */
+.badge-warning { background-color: #fef3c7; color: #92400e; }
+:is(.dark) .badge-warning { background-color: rgba(245, 158, 11, 0.2); color: #fcd34d; }
+/* The same amber as a fill, for the ungraded segment of a distribution bar,
+   and as text for the line that qualifies an average's denominator. */
+.bg-warning { background-color: #f59e0b; }
+:is(.dark) .bg-warning { background-color: #d97706; }
+.text-warning-foreground { color: #92400e; }
+:is(.dark) .text-warning-foreground { color: #fcd34d; }
 .badge-outline { background-color: transparent; border: 1px solid var(--border); color: var(--foreground); }
 
 /* Status badges */

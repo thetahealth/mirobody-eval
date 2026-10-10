@@ -209,14 +209,14 @@ async def _install_hermes() -> None:
 
 
 def _sync_api_key() -> None:
-    """将 HolyEval 的 OPENROUTER_API_KEY 同步到 ~/.hermes/.env"""
+    """将 mirobody-eval 的 OPENROUTER_API_KEY 同步到 ~/.hermes/.env"""
     logger.info("[Hermes Setup] Step 2/5: 同步 API key...")
 
-    # 从 HolyEval 环境获取 key
+    # 从 mirobody-eval 环境获取 key
     api_key = os.environ.get("OPENROUTER_API_KEY", "")
     if not api_key:
         raise HermesSetupError(
-            "HolyEval 环境未配置 OPENROUTER_API_KEY，请在 .env 文件中添加后重试"
+            "mirobody-eval 环境未配置 OPENROUTER_API_KEY，请在 .env 文件中添加后重试"
         )
 
     _HERMES_ENV.parent.mkdir(parents=True, exist_ok=True)

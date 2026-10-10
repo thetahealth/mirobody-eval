@@ -350,14 +350,14 @@ def _load_all_gemini_api_keys() -> List[str]:
     从环境变量加载所有 Gemini API keys。
     支持两种格式：
     1. 单个 key: GEMINI_API_KEY=xxx
-    2. 多个 key: liu-gemini-1=xxx, liu-gemini-2=xxx, ... 或 GEMINI_API_KEY_1=xxx, GEMINI_API_KEY_2=xxx, ...
+    2. 多个 key: GEMINI_API_KEY_1=xxx, GEMINI_API_KEY_2=xxx, ...
     """
     _load_dotenv_if_present()
     keys = []
 
-    # 先尝试加载多 key 格式（liu-gemini-* 或 GEMINI_API_KEY_*）
+    # 先尝试加载多 key 格式（GEMINI_API_KEY_*）
     for key, value in os.environ.items():
-        if key.startswith("liu-gemini-") or key.startswith("GEMINI_API_KEY_"):
+        if key.startswith("GEMINI_API_KEY_"):
             if value and value.strip():
                 keys.append(value.strip())
 
@@ -525,7 +525,7 @@ def get_multi_key_gemini_client_instance(
         resolved_keys = api_keys or _load_all_gemini_api_keys()
         if not resolved_keys:
             raise ValueError(
-                "缺少 Gemini API Key：请设置环境变量 GEMINI_API_KEY 或 liu-gemini-* / GEMINI_API_KEY_*"
+                "缺少 Gemini API Key：请设置环境变量 GEMINI_API_KEY 或 GEMINI_API_KEY_1 / GEMINI_API_KEY_2 ..."
             )
 
         global_multi_key_gemini_client = MultiKeyGeminiClient(

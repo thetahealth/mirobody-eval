@@ -9,7 +9,7 @@ DygRagApiTargetAgent — DyG-RAG 动态图检索增强问答
 3. 查询阶段: 时间/实体解析 → 时间加权向量检索 → 事件图随机游走 → Time-CoT → LLM 回答
 
 
-源自: /ThetaAI/tianyuchen/dyg-rag/ 的 GraphRAG 引擎
+源自: DyG-RAG 上游实现 的 GraphRAG 引擎
 """
 
 import asyncio
@@ -53,7 +53,7 @@ _GRAPHRAG_LOCKS: dict[str, asyncio.Lock] = {}
 
 
 # ============================================================
-# 数据转换: thetagen → DyG-RAG event_docs
+# 数据转换: 用户数据 → DyG-RAG event_docs
 # ============================================================
 
 
@@ -250,7 +250,7 @@ class DygRagApiTargetInfo(BaseModel):
         "gemini-3-pro-preview",
         description="QA 生成模型（默认 gemini-3-pro-preview，用于最终答案生成）",
     )
-    data_group: str = Field(description="数据目录（benchmark 名称，如 'thetagen'）")
+    data_group: str = Field(description="数据目录（benchmark 名称，如 'eslbench'）")
     user_email: Optional[str] = Field(None, description="用户邮箱（映射到 .data/{user_dir}/）")
     top_k: int = Field(20, description="DyG-RAG 种子事件数量（用于图遍历的起始节点数）", ge=1, le=100)
     enable_graph_traversal: bool = Field(True, description="是否启用图随机游走（关闭则仅用向量检索）")

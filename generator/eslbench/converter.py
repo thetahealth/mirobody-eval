@@ -1,7 +1,7 @@
 """
-KG Evaluation Queries → HolyEval BenchItem 转换器
+KG Evaluation Queries → mirobody-eval BenchItem 转换器
 
-将 thetagendata 的 kg_evaluation_queries.json 转为 HolyEval BenchItem JSONL，
+将 KG 评测查询 JSON（kg_evaluation_queries.json）转为 mirobody-eval BenchItem JSONL，
 使用 kg_qa 评估器，保留完整 ground truth 元数据。
 
 target_overrides 仅包含 per-case 参数（email / tool_context），
@@ -10,7 +10,7 @@ agent / language / tool_group 等公共参数由 metadata.json 默认值提供�
 用法:
   python -m generator.eslbench.converter \
     --input /path/to/kg_evaluation_queries.json \
-    --output benchmark/data/eslbench/sample.jsonl \
+    --output benchmark/data/eslbench/<dataset>.jsonl \
     --user-email user110@demo
 """
 
@@ -100,9 +100,13 @@ def convert_queries(
             "user": {
                 "type": "manual",
                 "strict_inputs": [query_text],
+                # 两个键写的是同一个邮箱，因为两个 target 读的位置不同：
+                # `llm_api.tool_context.user_email` 是 llm_api 读的位置，也是
+                # bench_schema 里几个只认身份的 target（RAG 那几个、hermes）的取值来源；
+                # `mirobody.user_email` 是 mirobody target 读的位置。
                 "target_overrides": {
-                    "theta_api": {"email": user_email},
                     "llm_api": {"tool_context": {"user_email": user_email}},
+                    "mirobody": {"user_email": user_email},
                 },
             },
             "eval": eval_config,
@@ -119,7 +123,7 @@ def convert_queries(
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-    parser = argparse.ArgumentParser(description="KG QA → HolyEval BenchItem")
+    parser = argparse.ArgumentParser(description="KG QA → mirobody-eval BenchItem")
     parser.add_argument("--input", required=True, help="kg_evaluation_queries.json 路径")
     parser.add_argument("--output", required=True, help="输出 JSONL 路径")
     parser.add_argument("--user-email", required=True, help="用户 email（如 user110@demo）")

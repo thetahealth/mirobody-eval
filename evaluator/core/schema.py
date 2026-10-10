@@ -226,6 +226,16 @@ class AutoUserInfo(BaseModel):
             "透传到被测后端的 file_list 字段）。"
         ),
     )
+    model: Optional[str] = Field(
+        None,
+        description=(
+            "扮演这个虚拟用户的 LLM。留空则用 auto TestAgent 的默认值。"
+            "CLI 用 --user-model 覆盖。\n"
+            "这个字段存在的原因：它原先只是 AutoTestAgent 构造函数的一个默认参数，"
+            "而 orchestrator 建实例时从不传它 —— 于是所有 auto 模式的数据集都被钉在"
+            "那个默认模型上，没有 OPENAI_API_KEY 的环境里一条都跑不了，且无处可改。"
+        ),
+    )
 
 
 class ManualUserInfo(BaseModel):
@@ -360,7 +370,7 @@ class TargetSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    type: str = Field(description="目标类型（如 llm_api / theta_api）")
+    type: str = Field(description="目标类型（如 llm_api / hermes）")
     fields: Dict[str, TargetFieldSpec] = Field(
         default_factory=dict,
         description="各字段的配置规格（字段名 → TargetFieldSpec）",
@@ -417,7 +427,7 @@ class TestCase(BaseModel):
                         "finish_condition": "AI 给出了可能的病因分析并建议了具体的缓解措施或就医建议",
                     },
                     "target": {
-                        "type": "theta_api",
+                        "type": "llm_api",
                         "email": "demo1@symptom_entry_evaluation.com",
                     },
                     "eval": {
@@ -538,11 +548,22 @@ class TestCost(BaseModel):
 class EvalResult(BaseModel):
     """评估结果
 
-    result 四态:
+    result 四态，按「有没有判成分」划分:
+
+    判成了 ——
     - "pass"   — 得分 >= threshold，通过
     - "fail"   — 得分 < threshold，未通过
     - "scored" — 仅评分，不判定通过/失败（threshold 未设置时使用）
-    - "error"  — 基础设施故障（如 API 502），不计入 pass/fail 统计
+
+    没判成 ——
+    - "error"  — 判分没发生:基础设施故障（API 502、超时、连接失败）、判分器
+                 不可用（`JudgeUnavailable`）、用例被取消，以及本框架自身抛出
+                 的任何异常。不计入 pass/fail，也不计入 avg_score。
+
+    这条界线是硬的:`score` 字段在 error 下恒为 0.0，但那个 0 不是成绩，读它
+    的代码必须先看 result。把没判成的算作 fail 0.00 会让「没跑完」和「答错了」
+    无法区分 —— 而同一道题在预算不足时 0.00、预算够时 0.89，一个随评测方配置
+    变化的数不能当成被测系统的属性。
     """
 
     result: Literal["pass", "fail", "scored", "error"] = Field(description="测试结果（pass/fail/scored/error）")
@@ -557,7 +578,7 @@ class TestResult(BaseModel):
     id: str = Field(description="测试用例 ID")
     title: str = Field("", description="用例标题（来自 TestCase.title）")
     user_type: str = Field("", description="TestAgent 类型（如 auto / manual）")
-    target_type: str = Field("", description="TargetAgent 类型（如 llm_api / theta_api）")
+    target_type: str = Field("", description="TargetAgent 类型（如 llm_api / hermes）")
     eval_type: str = Field("", description="EvalAgent 类型（如 semantic / healthbench）")
     eval: EvalResult = Field(description="评估结果")
     cost: TestCost = Field(default_factory=TestCost, description="测试成本")
@@ -589,6 +610,15 @@ class TestReport(BaseModel):
         return sum(1 for c in self.cases if c.eval.result == "fail")
 
     @property
+    def error_count(self) -> int:
+        """没判成分的用例数 — 超时/连接失败/判分器不可用/被取消
+
+        读 `avg_score` 必须同时读这个:它们被排除在平均分之外，所以一个大面积
+        失败的跑批会显示成漂亮的高分。
+        """
+        return sum(1 for c in self.cases if c.eval.result == "error")
+
+    @property
     def pass_rate(self) -> float:
         """通过率 — 仅在有 pass/fail 判定的用例中计算，全部为 scored 时返回 0.0"""
         judged = self.pass_count + self.fail_count
@@ -596,8 +626,12 @@ class TestReport(BaseModel):
 
     @property
     def avg_score(self) -> float:
-        """平均得分，无用例时返回 0.0"""
-        return sum(c.eval.score for c in self.cases) / len(self.cases) if self.cases else 0.0
+        """平均得分 — 分母只含判成了分的用例（不含 error），无此类用例时返回 0.0
+
+        error 的 score 恒为 0.0，但那个 0 不是成绩。见 EvalResult 的四态说明。
+        """
+        scored = [c for c in self.cases if c.eval.result != "error"]
+        return sum(c.eval.score for c in scored) / len(scored) if scored else 0.0
 
     @property
     def total_duration_seconds(self) -> float:
@@ -788,6 +822,10 @@ class DatasetInfo(BaseModel):
     case_count: int
     file_size_kb: float
     evaluator: str = ""  # 数据集使用的评估器类型（首条 case 的 eval.evaluator）
+    # 能不能跑。发布批次里最新一期是闭卷的 —— 题目发了、答案没发，所以没有
+    # evaluator 字段、加载即失败。列出来但标明原因，比藏起来有用：它确实存在、
+    # 也确实是榜单在用的那个，只是还不能自己跑。
+    unavailable_reason: str = ""
 
 
 class BenchmarkSummary(BaseModel):

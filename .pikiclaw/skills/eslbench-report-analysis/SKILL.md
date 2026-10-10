@@ -10,13 +10,13 @@ Extract and compare evaluation results from HolyEval benchmark report JSON files
 ## Report Locations
 
 ```
-~/xiaotong/holyeval/benchmark/report/eslbench/
+benchmark/report/eslbench/
   {dataset}_{target_type}_{model}_{date}_{time}.json
-~/*/holyeval/benchmark/report/eslbench/
-  {dataset}_{target_type}_{model}_{date}_{time}.json
+
+（报告根目录可用 HOLYEVAL_REPORT_DIR 环境变量覆盖，见 evaluator/utils/paths.py）
 ```
 
-Example report paths for recent 3 days: YYYYMMDD-3 to YYYYMMDD: `~/xiaotong/holyeval/benchmark/report/eslbench/sample50-20260331_*_{YYYYMMDD-2,YYYYMMDD-1,YYYYMMDD}*.json`
+Example report paths for recent 3 days: YYYYMMDD-3 to YYYYMMDD: `benchmark/report/eslbench/sample50-20260331_*_{YYYYMMDD-2,YYYYMMDD-1,YYYYMMDD}*.json`
 
 ## Report JSON Structure
 
@@ -75,7 +75,7 @@ case = {
 ## Resolving Input Files
 
 Input can be any of:
-- **Glob pattern**: `~/xiaotong/holyeval/benchmark/report/eslbench/sample50-20260331_*.json`
+- **Glob pattern**: `benchmark/report/eslbench/sample50-20260331_*.json`
 - **Directory**: scan all `*.json` inside
 - **Explicit file list**: one or more JSON file paths
 - **Zip URL**: download, extract, scan `*.json` inside
@@ -89,7 +89,7 @@ The analysis output MUST show the **full resolved file path** for each report pr
 
 Do NOT rely on script stdout alone for showing file paths — it will be truncated for large analyses.
 
-Default report location (if no input specified): `~/xiaotong/holyeval/benchmark/report/eslbench/`
+Default report location (if no input specified): `benchmark/report/eslbench/`
 
 ## Analysis Script Template
 
@@ -121,7 +121,7 @@ def resolve_report_files(inputs):
 
 def analyze_reports(inputs=None):
     if inputs is None:
-        inputs = [os.path.expanduser("~/xiaotong/holyeval/benchmark/report/eslbench")]
+        inputs = [os.environ.get("HOLYEVAL_REPORT_DIR", "benchmark/report") + "/eslbench"]
     files = resolve_report_files(inputs)
     rows = []
     for fpath in files:
@@ -261,7 +261,7 @@ Classify WHY each agent scores low on each dimension. Combines fail cases and lo
 import json, glob, os, re
 from collections import Counter
 
-REPORT_DIR = os.path.expanduser("~/xiaotong/holyeval/benchmark/report/eslbench")
+REPORT_DIR = os.environ.get("HOLYEVAL_REPORT_DIR", "benchmark/report") + "/eslbench"
 DIMS = ["Lookup", "Trend", "Comparison", "Anomaly", "Explanation"]
 
 def classify_feedback(fb):
@@ -322,7 +322,7 @@ def print_full_analysis(inputs=None, show_cases=3):
     """Print per-report-file per-dimension error breakdown with sample case IDs.
     inputs: same as analyze_reports(). show_cases: max case IDs per error category (0 to hide)."""
     if inputs is None:
-        inputs = [os.path.expanduser("~/xiaotong/holyeval/benchmark/report/eslbench")]
+        inputs = [os.environ.get("HOLYEVAL_REPORT_DIR", "benchmark/report") + "/eslbench"]
     files = resolve_report_files(inputs)
     for fpath in files:
         fname = os.path.basename(fpath)
@@ -349,7 +349,7 @@ def print_full_analysis(inputs=None, show_cases=3):
 
 ### Cross-Agent Dimension Patterns
 
-When multiple agent types are present (LLM-direct, RAG, Structured API / theta), **always generate a cross-agent comparison table** in the markdown report under `## Cross-Agent Error Patterns`. Group agents into categories and show the top 2 error types per dimension per category.
+When multiple agent types are present (LLM-direct, RAG, Structured API), **always generate a cross-agent comparison table** in the markdown report under `## Cross-Agent Error Patterns`. Group agents into categories and show the top 2 error types per dimension per category.
 
 Template (populate from actual data, not hardcoded):
 
@@ -364,7 +364,7 @@ Template (populate from actual data, not hardcoded):
 Agent category mapping:
 - **LLM-direct**: `llm_api` target type (gpt-5.4, gemini-flash, claude-sonnet, minimax, glm, etc.)
 - **RAG**: `*_rag_api` target types (hippo_rag, dyg_rag, mem0_rag, evermem)
-- **Structured API**: `theta_api`, `theta_smart_api`
+- **Structured API**: `hermes` and any privately registered structured-backend target types
 
 After the table, add a **Key insights** paragraph noting which categories dominate which dimensions and why.
 
@@ -394,7 +394,7 @@ def export_error_cases(inputs=None, threshold=0.8, output_path=None):
     """
     import datetime
     if inputs is None:
-        inputs = [os.path.expanduser("~/xiaotong/holyeval/benchmark/report/eslbench")]
+        inputs = [os.environ.get("HOLYEVAL_REPORT_DIR", "benchmark/report") + "/eslbench"]
     if output_path is None:
         today = datetime.date.today().strftime("%Y%m%d")
         output_path = f"docs/eslbench_error_cases-{today}.json"
@@ -482,8 +482,8 @@ Each exported case contains:
 
 - **`pass_rate`**: Often 0.0 because it uses a strict binary threshold; use `avg_score` instead for meaningful comparison
 - **`fail_count`**: Eval-level errors (API timeout, parse failure), NOT low-scoring answers. High fail = unreliable run
-- **`theta_api_expert` at 0%**: Usually means API connectivity issue, not model failure
-- **Token cost = 0**: Means token tracking not enabled for that target type (e.g. mem0_rag, theta_api)
+- **A structured-API target at 0%**: Usually means API connectivity issue, not model failure
+- **Token cost = 0**: Means token tracking not enabled for that target type (e.g. mem0_rag)
 - **Multiple runs of same model**: Take the latest or lowest-fail run; early runs may have config bugs
 - **`s/q` (seconds per query)**: Dominated by retrieval + generation time; <30s usually means cached/fast path
 
@@ -550,19 +550,13 @@ When saving analysis, produce **two files**:
    - `## Cross-Agent Error Patterns` — the cross-agent dimension comparison table (if multiple agent types present)
    - `## Agent Performance (Verified)` — deduplicated table of agents with fail_rate < 40% and scored > 30, plus per-agent dimension radar
    - `## Error Distribution` — aggregate error category and difficulty counts
-2. **Error cases JSON**: `docs/eslbench_error_cases-YYYYMMDD.json` — all low-score/failed cases for debugging
+2. **Error cases JSON**: `<report-dir>/eslbench_error_cases-YYYYMMDD.json` — all low-score/failed cases for debugging
 
-**Always** print the mdpreview link for the markdown report:
-
-```
-http://10.241.13.122:22086/preview.html?path={path-relative-to-/home/fat/}
-```
-
-Example: if saved to `/home/fat/caill/thetagendata/docs/eslbench_report_analysis-20260401.md`, output:
+**Always** print where the two artifacts were written, e.g.:
 
 ```
-http://10.241.13.122:22086/preview.html?path=caill/thetagendata/docs/eslbench_report_analysis-20260401.md
-Error cases: docs/eslbench_error_cases-20260401.json (N cases)
+Report:      <report-dir>/eslbench_report_analysis-20260401.md
+Error cases: <report-dir>/eslbench_error_cases-20260401.json (N cases)
 ```
 
 ## Final: Verify Output Sections

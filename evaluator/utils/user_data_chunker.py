@@ -1,4 +1,4 @@
-"""thetagen 用户数据分块工具 — HippoRAG / mem0 等 RAG agent 共享
+"""用户数据分块工具 — HippoRAG / mem0 等 RAG agent 共享
 
 仅加载 profile.json + timeline.json，不加载 events.json（含答案，会泄露）。
 

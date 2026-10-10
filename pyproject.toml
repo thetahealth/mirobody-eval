@@ -1,7 +1,7 @@
 [project]
-name = "holyeval"
+name = "mirobody-eval"
 version = "0.1.0"
-description = "Open-source LLM evaluation framework — reproduce any benchmark with one command"
+description = "Evaluation for mirobody — seed a synthetic user, score your deployment, reproduce any published benchmark"
 requires-python = ">=3.11"
 readme = "README.md"
 dependencies = [
@@ -10,6 +10,40 @@ dependencies = [
     "holyeval-generator",
     "holyeval-web",
 ]
+
+[project.optional-dependencies]
+# Seeding a deployment and the `mirobody` target both reach into the engine they
+# are pointed at — `execute_query` for its Postgres, `IndicatorSyncTask` to make
+# the seeded indicators searchable, `JWT_KEY` to sign a token for a synthetic
+# user that has no login. Optional because every other target here speaks plain
+# HTTP and needs none of it.
+#
+# Every part of this requirement was found by installing it and importing what
+# the seeder actually calls:
+#
+#   `[app]`   — `mirobody.task.base` does a plain `from redis.asyncio import
+#   Redis`, and redis (with psycopg and sqlalchemy, which `execute_query` needs)
+#   lives in that extra. Bare `mirobody` installs, and then `IndicatorSyncTask`
+#   dies on `No module named 'redis'`.
+#
+#   `[parse]` — python-dotenv, which `mirobody.utils.config` imports at module
+#   scope. Without it `global_config()` — and therefore JWT signing in the
+#   target agent — dies on `No module named 'dotenv'`.
+#
+#   `>=1.3.0` — 1.3.0 renamed the extras. `pip install mirobody` is now the
+#   LIBRARY (2 packages) and the six old extras became two; `[server]` and
+#   `[agents]` are gone. An unknown extra is a warning rather than an error, so
+#   the old `mirobody[server]` pin kept resolving and silently installed the
+#   library half — the failure surfaced later as the two ModuleNotFoundErrors
+#   above. Pinning the floor to 1.3.0 keeps the extra names and the version in
+#   step, so a resolver can never pick a release where these names mean nothing.
+#
+# The marker is required rather than cosmetic: mirobody is Python>=3.12 while
+# this project supports >=3.11, so an unmarked requirement makes the whole
+# workspace unresolvable on 3.11 — including for the targets that never touch
+# mirobody. On 3.11 the extra therefore installs nothing, and
+# `generator.eslbench.seed_mirobody` says so instead of failing on an import.
+mirobody = ["mirobody[app,parse]>=1.3.0; python_version >= '3.12'"]
 
 [tool.uv]
 package = false

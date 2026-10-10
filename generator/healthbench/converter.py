@@ -1,7 +1,7 @@
 """
-HealthBench → HolyEval 数据转换器
+HealthBench → mirobody-eval 数据转换器
 
-将 HealthBench JSONL 转换为 HolyEval BenchItem JSONL，使其可以直接
+将 HealthBench JSONL 转换为 mirobody-eval BenchItem JSONL，使其可以直接
 通过 `python -m benchmark.basic_runner healthbench <dataset>` 执行。
 
 转换映射:
@@ -37,14 +37,14 @@ def _extract_theme(tags: List[str]) -> Optional[str]:
 
 
 def _convert_single(entry: Dict[str, Any], index: int) -> Optional[Dict[str, Any]]:
-    """将单条 HealthBench 数据转换为 HolyEval BenchItem dict
+    """将单条 HealthBench 数据转换为 mirobody-eval BenchItem dict
 
     Args:
         entry: HealthBench JSONL 中的一条记录
         index: 序号（用于 id 生成）
 
     Returns:
-        HolyEval BenchItem dict，转换失败返回 None
+        mirobody-eval BenchItem dict，转换失败返回 None
     """
     prompt_id = entry.get("prompt_id", f"unknown_{index}")
     example_tags = entry.get("example_tags", [])
@@ -118,11 +118,11 @@ def convert(
     output_path: str | Path,
     limit: int | None = None,
 ) -> int:
-    """将 HealthBench JSONL 转换为 HolyEval BenchItem JSONL
+    """将 HealthBench JSONL 转换为 mirobody-eval BenchItem JSONL
 
     Args:
         input_path:    HealthBench 源 JSONL 路径
-        output_path:   输出 HolyEval BenchItem JSONL 路径
+        output_path:   输出 mirobody-eval BenchItem JSONL 路径
         limit:         最大转换条数（None 表示全部）
 
     Returns:
@@ -170,7 +170,7 @@ def convert(
 def main() -> None:
     """CLI 入口"""
     parser = argparse.ArgumentParser(
-        description="将 HealthBench JSONL 转换为 HolyEval BenchItem JSONL",
+        description="将 HealthBench JSONL 转换为 mirobody-eval BenchItem JSONL",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "示例:\n"
@@ -179,7 +179,7 @@ def main() -> None:
         ),
     )
     parser.add_argument("input", help="HealthBench 源 JSONL 文件路径")
-    parser.add_argument("output", help="输出 HolyEval BenchItem JSONL 文件路径")
+    parser.add_argument("output", help="输出 mirobody-eval BenchItem JSONL 文件路径")
     parser.add_argument("--limit", type=int, default=None, help="最大转换条数")
     parser.add_argument("-v", "--verbose", action="store_true", help="输出详细日志")
 

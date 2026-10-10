@@ -4,7 +4,7 @@ Mem0RagApiTargetAgent — mem0 记忆增强问答
 注册名称: "mem0_rag_api"
 
 实现流程:
-1. 加载用户数据文件 → 复用 thetagen_chunker 智能切分（排除 events.json）
+1. 加载用户数据文件 → 复用 user_data_chunker 智能切分（排除 events.json）
 2. 通过 mem0.add(chunk, user_id, infer=True) 批量写入记忆（LLM 自动提取关键事实）
 3. 查询时 mem0.search(query, user_id) 检索相关记忆
 4. 拼接 RAG prompt + few-shot 示例 → LLM 生成答案
@@ -32,7 +32,7 @@ from evaluator.core.schema import (
     TestAgentAction,
 )
 from evaluator.utils.llm import BasicMessage, do_execute
-from evaluator.utils.thetagen_chunker import BENCHMARK_DATA_DIR, load_user_documents, resolve_user_dir
+from evaluator.utils.user_data_chunker import BENCHMARK_DATA_DIR, load_user_documents, resolve_user_dir
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +213,7 @@ class Mem0RagApiTargetInfo(BaseModel):
                     "_comment": "默认配置（embedding 与 HippoRAG 一致）",
                     "type": "mem0_rag_api",
                     "model": "gemini-3-flash-preview",
-                    "data_group": "thetagen",
+                    "data_group": "eslbench",
                     "user_email": "user110@demo",
                 },
             ],
@@ -237,7 +237,7 @@ class Mem0RagApiTargetInfo(BaseModel):
         "text-embedding-3-large",
         description="嵌入模型（与 HippoRAG 一致）",
     )
-    data_group: str = Field(description="数据目录（benchmark 名称，如 'thetagen'）")
+    data_group: str = Field(description="数据目录（benchmark 名称，如 'eslbench'）")
     user_email: Optional[str] = Field(None, description="用户邮箱（映射到 .data/{user_dir}/）")
     top_k: int = Field(10, description="检索记忆条数", ge=1, le=100)
     max_chunk_chars: int = Field(15000, description="文档切分字符数", ge=1000, le=50000)

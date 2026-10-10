@@ -63,7 +63,7 @@ class HealthBenchEvalInfo(BaseModel):
     Score calculation: achieved_points / total_positive_points, fully consistent with original calculate_score.
     Scoring only (result="scored"), no pass/fail judgment.
 
-    Designed for running HealthBench datasets converted to HolyEval format.
+    Designed for running HealthBench datasets converted to mirobody-eval format.
     """
 
     model_config = ConfigDict(

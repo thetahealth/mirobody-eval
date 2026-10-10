@@ -167,6 +167,9 @@ class DialogueQualityEvalInfo(BaseModel):
     evaluator: Literal["dialogue_quality"] = Field(default="dialogue_quality", description="Evaluator type")
     dimensions: Dict[str, float] = Field(default_factory=lambda: dict(_DEFAULT_DIMENSIONS), description="维度名 → 权重")
     threshold: float = Field(default=0.6, ge=0.0, le=1.0, description="Pass threshold (0-1)")
+    # Bare `gpt-*` — routed straight to the OpenAI API, matching the documented
+    # setup (OPENAI_API_KEY required, OPENROUTER_API_KEY optional). Override the
+    # model with any `provider/model` name to reach OpenRouter instead.
     judge_model: str = Field(default="gpt-4.1", description="Judge LLM model")
     user_context: Optional[str] = Field(
         default=None,

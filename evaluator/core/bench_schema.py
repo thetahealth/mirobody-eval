@@ -165,13 +165,28 @@ class BenchReport(BaseModel):
 
     benchmark_name: str = Field(description="评测类型（如 healthbench）")
     dataset_name: str = Field(description="数据集名称（如 sample）")
+    dataset_provenance: dict = Field(
+        default_factory=dict,
+        description=(
+            "这份分数对应的数据集版本。`source=fetched` 时带 batch / manifest_version / "
+            "batch_checksum —— 有了它，一个分数才能指回一个确定的发布；`source=vendored` "
+            "是仓库内自带的副本，能离线跑，但无法说明对应哪一期。缺这个字段的报告是本字段"
+            "加入之前产生的。"
+        ),
+    )
     runtime_target: Optional[TargetInfo] = Field(None, description="运行时使用的被测系统配置（eval-only 模式为 None）")
     max_concurrency: int = Field(default=0, description="并发数")
     cases: List[TestResult] = Field(description="用例结果列表")
     pass_count: int = Field(default=0)
     fail_count: int = Field(default=0)
+    error_count: int = Field(
+        default=0,
+        description="没判成分的用例数（超时/连接失败/判分器不可用/被取消）。"
+        "不计入 pass/fail，也不计入 avg_score —— 所以读 avg_score 必须同时读它，"
+        "否则一个大面积失败的跑批会显示成漂亮的高分",
+    )
     pass_rate: float = Field(default=0.0)
-    avg_score: float = Field(default=0.0)
+    avg_score: float = Field(default=0.0, description="平均分，分母只含判成了分的用例（不含 error）")
     total_duration_seconds: float = Field(default=0.0)
     stats_by_tag: dict[str, dict] = Field(default_factory=dict)
     started_at: datetime = Field(default_factory=datetime.now)
@@ -306,18 +321,27 @@ def find_target_spec(specs: List[TargetSpec], target_type: str | None = None) ->
 
     Args:
         specs:       TargetSpec 列表（来自 metadata.json）
-        target_type: 目标类型（如 "llm_api"），None 时使用第一个
+        target_type: 目标类型（如 "llm_api"）。只有一个候选时可以不给
 
     Returns:
         匹配的 TargetSpec
 
     Raises:
-        ValueError: 列表为空或 target_type 不匹配
+        ValueError: 列表为空、有多个候选却没指定、或 target_type 不匹配
     """
     if not specs:
         raise ValueError("metadata.json 中未定义 target 配置")
     if target_type is None:
-        return specs[0]
+        if len(specs) == 1:
+            return specs[0]
+        # 多个候选时不猜。以前是无条件返回 specs[0] —— 而 eslbench 的 metadata 把
+        # `mirobody` 排在第一位,于是 README 里少写了 `--target-type` 的那条命令会
+        # 静默选中 mirobody、跑到连数据库时才失败,报错说的是「数据库 admin 不存在」,
+        # 跟真实原因（没说要测哪个系统）毫无关系。
+        raise ValueError(
+            f"该数据集有 {len(specs)} 个可测系统，必须用 --target-type 指定一个: "
+            f"{[s.type for s in specs]}"
+        )
     for spec in specs:
         if spec.type == target_type:
             return spec
@@ -430,34 +454,61 @@ def bench_item_to_test_case(
         _OVERRIDE_FALLBACKS: Dict[str, list[str]] = {
             "dyg_rag_api": ["hippo_rag_api"],
             "hippo_rag_api": ["dyg_rag_api"],
-            "theta_smart_api": ["theta_api"],
         }
         for fallback_type in _OVERRIDE_FALLBACKS.get(spec.type, []):
             matched_override = item.user.target_overrides.get(fallback_type)
             if matched_override is not None:
                 break
 
-    # 跨族 fallback: 从 theta_api.email 推导 user_email（hippo_rag_api / dyg_rag_api / naive_rag_api / evermem / mem0_rag_api 共用）
-    if matched_override is None and spec.type in ("hippo_rag_api", "dyg_rag_api", "naive_rag_api", "evermem", "mem0_rag_api"):
-        theta_override = item.user.target_overrides.get("theta_api")
-        if theta_override and isinstance(theta_override, dict) and "email" in theta_override:
-            matched_override = {"user_email": theta_override["email"]}
-
-    # 跨族 fallback: hermes 从 llm_api.tool_context.user_email 或 theta_api.email 推导 user_email
-    if matched_override is None and spec.type == "hermes":
+    # 跨族 fallback: 只认身份的 target 从 llm_api.tool_context.user_email 取 user_email。
+    #
+    # 这些 target 的 override 里唯一有用的字段就是「问的是谁」，而每条用例都要在
+    # llm_api 那侧写一遍同一个邮箱，所以复用它，而不是要求语料为每个 target 各写一份。
+    # 随附语料实测：35,535 条带 override 的用例，全部有这个字段，缺失 0 条。
+    #
+    # 这里原先读的是另一个 target 的键名，而那个 target 并不在本仓库里 —— 一个不存在的
+    # target 的键成了几个公开 target 的唯一身份来源，等于把它的形状焊死在语料里。改读
+    # llm_api 之后语料里就不必再留那个键，35,535 条用例的 override 也随之清干净。
+    _IDENTITY_ONLY_TARGETS = (
+        "hippo_rag_api", "dyg_rag_api", "naive_rag_api", "evermem", "mem0_rag_api", "hermes",
+    )
+    if matched_override is None and spec.type in _IDENTITY_ONLY_TARGETS:
         llm_override = item.user.target_overrides.get("llm_api")
-        if llm_override and isinstance(llm_override, dict):
+        if isinstance(llm_override, dict):
             tool_ctx = llm_override.get("tool_context")
-            if isinstance(tool_ctx, dict) and "user_email" in tool_ctx:
+            if isinstance(tool_ctx, dict) and tool_ctx.get("user_email"):
                 matched_override = {"user_email": tool_ctx["user_email"]}
-        if matched_override is None:
-            theta_override = item.user.target_overrides.get("theta_api")
-            if theta_override and isinstance(theta_override, dict) and "email" in theta_override:
-                matched_override = {"user_email": theta_override["email"]}
 
-    effective_target = resolve_effective_target(spec, cli_overrides, matched_override)
+    # A run has three LLM-driven actors — the virtual user, the target, and the
+    # judge — and `cli_overrides` reaches only the target. The other two are
+    # addressed by reserved keys, split off here: left in, each would trip the
+    # "field is not editable, ignored" warning on every single case. `target_type`
+    # is the pre-existing member of that family and did exactly that.
+    target_overrides_from_cli = dict(cli_overrides or {})
+    user_model = target_overrides_from_cli.pop("user_model", None)
+    eval_model = target_overrides_from_cli.pop("eval_model", None)
+    target_overrides_from_cli.pop("target_type", None)
+
+    effective_target = resolve_effective_target(spec, target_overrides_from_cli or None, matched_override)
     user_dict = item.user.model_dump(exclude={"target_overrides"})
+    if user_model and user_dict.get("type") == "auto":
+        user_dict["model"] = user_model
     user_info = _USER_ADAPTER.validate_python(user_dict)
+
+    eval_config = item.eval
+    if eval_model:
+        # Evaluators disagree on the field name (`model`, `judge_model`,
+        # `extractor_model`), so set whichever this one declares rather than
+        # guessing one and silently doing nothing on the others.
+        for field in ("model", "judge_model", "extractor_model"):
+            if field in type(eval_config).model_fields:
+                eval_config = eval_config.model_copy(update={field: eval_model})
+                break
+        else:
+            _logger.warning(
+                "评测器 %s 没有可覆盖的模型字段，--eval-model 对它无效",
+                type(eval_config).__name__,
+            )
 
     # answer_format_hint: 如果 eval config 定义了格式提示，追加到最后一条 strict_inputs
     hint = getattr(item.eval, "answer_format_hint", None)
@@ -470,10 +521,41 @@ def bench_item_to_test_case(
         description=item.description,
         user=user_info,
         target=effective_target,
-        eval=item.eval,
+        eval=eval_config,
         history=item.history,  # dict 列表 → TestCase field_validator 自动归一化为 BaseMessage
         tags=item.tags,
     )
+
+
+def compute_stats_by_tag(test_results: list[TestResult]) -> dict[str, dict]:
+    """按 tag 分组统计 —— CLI 报告和 Web UI 共用这一份。
+
+    以前是两份:`build_bench_report` 一份、`web/app/services/task_manager.py`
+    一份。两份算的是同一个东西，但「平均分要不要排除没判成分的用例」这条规则
+    只在一份里修，另一份就继续用旧口径 —— 一个 tag 的分数会因为你从 CLI 还是
+    从网页看而不同。规则只写一次，就不会有那种分歧。
+    """
+    tag_results: dict[str, list[TestResult]] = {}
+    for result in test_results:
+        for tag in result.tags:
+            tag_results.setdefault(tag, []).append(result)
+
+    stats: dict[str, dict] = {}
+    for tag, results in tag_results.items():
+        tag_pass = sum(1 for r in results if r.eval.result == "pass")
+        tag_fail = sum(1 for r in results if r.eval.result == "fail")
+        tag_error = sum(1 for r in results if r.eval.result == "error")
+        tag_judged = tag_pass + tag_fail
+        tag_scored = [r for r in results if r.eval.result != "error"]
+        stats[tag] = {
+            "total": len(results),
+            "pass_count": tag_pass,
+            "fail_count": tag_fail,
+            "error_count": tag_error,
+            "pass_rate": tag_pass / tag_judged if tag_judged else 0.0,
+            "avg_score": (sum(r.eval.score for r in tag_scored) / len(tag_scored)) if tag_scored else 0.0,
+        }
+    return stats
 
 
 def build_bench_report(
@@ -488,39 +570,40 @@ def build_bench_report(
     """从 TestResult 列表构建 BenchReport"""
     pass_count = sum(1 for r in test_results if r.eval.result == "pass")
     fail_count = sum(1 for r in test_results if r.eval.result == "fail")
+    error_count = sum(1 for r in test_results if r.eval.result == "error")
     judged = pass_count + fail_count  # 有 pass/fail 判定的用例数（不含 scored）
     pass_rate = pass_count / judged if judged else 0.0
-    avg_score = sum(r.eval.score for r in test_results) / len(test_results) if test_results else 0.0
+    # 平均分只在「判成了分」的用例上算。error 的 score 恒为 0.0，但那个 0 不是
+    # 成绩 —— 把它算进分母和分子，等于让没跑完的用例按 0 分拉低被测系统的成绩。
+    # 这一条此前漏了:`pass_rate` 的分母早就排除了 error，`avg_score` 没有，所以
+    # 连判分器不可用那条本来做对了的路（`JudgeUnavailable` → error）也一直在
+    # 被算作 0 分。`error_count` 与之配套发布 —— 排除了就必须让分母可见,否则
+    # 一个大面积失败的跑批会显示成漂亮的高分。
+    scored_results = [r for r in test_results if r.eval.result != "error"]
+    avg_score = sum(r.eval.score for r in scored_results) / len(scored_results) if scored_results else 0.0
     total_duration = sum((r.end - r.start).total_seconds() for r in test_results)
 
-    # 按 tag 分组统计
-    stats_by_tag: dict[str, dict] = {}
-    tag_results: dict[str, list[TestResult]] = {}
-    for result in test_results:
-        for tag in result.tags:
-            tag_results.setdefault(tag, []).append(result)
+    stats_by_tag = compute_stats_by_tag(test_results)
 
-    for tag, results in tag_results.items():
-        tag_pass = sum(1 for r in results if r.eval.result == "pass")
-        tag_fail = sum(1 for r in results if r.eval.result == "fail")
-        tag_judged = tag_pass + tag_fail
-        tag_total = len(results)
-        stats_by_tag[tag] = {
-            "total": tag_total,
-            "pass_count": tag_pass,
-            "fail_count": tag_fail,
-            "pass_rate": tag_pass / tag_judged if tag_judged else 0.0,
-            "avg_score": sum(r.eval.score for r in results) / tag_total if tag_total else 0.0,
-        }
+    # 读一次数据集来源，写进报告：一个分数必须能指回它跑的是哪一期。
+    # 解析失败不该让一份跑完的报告丢掉 —— 来源缺失只是少了追溯信息。
+    try:
+        from evaluator.utils.benchmark_reader import resolve_dataset
+
+        _, provenance = resolve_dataset(benchmark_name, dataset_name)
+    except Exception:  # pragma: no cover - 来源信息是附加项，不能反过来毁掉报告
+        provenance = {}
 
     return BenchReport(
         benchmark_name=benchmark_name,
         dataset_name=dataset_name,
+        dataset_provenance=provenance,
         runtime_target=runtime_target,
         max_concurrency=max_concurrency,
         cases=test_results,
         pass_count=pass_count,
         fail_count=fail_count,
+        error_count=error_count,
         pass_rate=pass_rate,
         avg_score=avg_score,
         total_duration_seconds=total_duration,

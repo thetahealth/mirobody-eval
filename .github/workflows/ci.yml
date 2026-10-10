@@ -19,6 +19,12 @@ jobs:
       - run: uv run ruff check . || true
       - run: uv run ruff format --check . || true
 
+  # 跑三样都**不需要 API key 也能失败**的检查：随发布的单元测试、插件注册得起来、
+  # 仓库里每个数据集声明的被测目标和评测器都真的存在。
+  #
+  # `evaluator/tests/` 确实不随开源版发布，但和代码放在一起的 `test_*.py` 是发布的
+  # （纯逻辑，无 DB、无网络、无 LLM），所以这里对它们跑 pytest —— 原先整条 pytest
+  # 都被跳过，等于那些测试发布出去却从没被执行过。
   test:
     runs-on: ubuntu-latest
     steps:
@@ -27,12 +33,60 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: uv sync
-      - run: >
-          uv run pytest evaluator/tests/ -v
-          --ignore=evaluator/tests/test_e2e.py
-          --ignore=evaluator/tests/test_preset_answer_eval.py
-          --ignore=evaluator/tests/test_data_flow.py
-          --ignore=evaluator/tests/test_eval_only.py
-          --ignore=evaluator/tests/test_report_reader.py
-          || true
+      - run: uv sync --group dev
+      - name: Unit tests that ship with the repo
+        run: uv run python -m pytest generator/ evaluator/ -q
+      - name: Plugin registries load
+        run: |
+          uv run python - <<'PY'
+          import evaluator.plugin.eval_agent, evaluator.plugin.target_agent, evaluator.plugin.test_agent  # noqa: F401
+          from evaluator.core.interfaces.abstract_eval_agent import AbstractEvalAgent
+          from evaluator.core.interfaces.abstract_target_agent import AbstractTargetAgent
+          evals, targets = sorted(AbstractEvalAgent.get_all()), sorted(AbstractTargetAgent.get_all())
+          print("eval agents  :", evals)
+          print("target agents:", targets)
+          assert evals and targets, "plugin registry is empty"
+          PY
+      - name: Every shipped dataset is runnable
+        run: |
+          uv run python - <<'PY'
+          import json, sys
+          from pathlib import Path
+          import evaluator.plugin.eval_agent, evaluator.plugin.target_agent  # noqa: F401
+          from evaluator.core.interfaces.abstract_eval_agent import AbstractEvalAgent
+          from evaluator.core.interfaces.abstract_target_agent import AbstractTargetAgent
+
+          bad = []
+          for d in sorted(Path("benchmark/data").iterdir()):
+              meta = d / "metadata.json"
+              if not d.is_dir() or not meta.is_file():
+                  continue
+              try:
+                  j = json.loads(meta.read_text(encoding="utf-8"))
+              except json.JSONDecodeError as e:
+                  bad.append(f"{d.name}/metadata.json is not valid JSON: {e}")
+                  continue
+              tg = j.get("target")
+              tg = tg if isinstance(tg, list) else ([tg] if isinstance(tg, dict) else [])
+              types = [t.get("type") for t in tg if isinstance(t, dict)]
+              missing = [t for t in types if t not in AbstractTargetAgent.get_all()]
+              if missing:
+                  bad.append(f"{d.name}: metadata declares unregistered target(s) {missing}")
+              for f in sorted(d.glob("*.jsonl")):
+                  seen = set()
+                  for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+                      if not line.strip():
+                          continue
+                      try:
+                          item = json.loads(line)
+                      except json.JSONDecodeError as e:
+                          bad.append(f"{d.name}/{f.name}:{n} invalid JSON: {e}")
+                          break
+                      ev = (item.get("eval") or {}).get("evaluator")
+                      if ev and ev not in AbstractEvalAgent.get_all() and ev not in seen:
+                          seen.add(ev)
+                          bad.append(f"{d.name}/{f.name}: unregistered evaluator {ev!r}")
+          for b in bad:
+              print("FAIL:", b)
+          sys.exit(1 if bad else 0)
+          PY

@@ -10,8 +10,8 @@ agent-side LLM cost again.
 
 Usage:
   uv run python -m benchmark.re_eval_reports \\
-    benchmark/report/medhall/full-20260520_llm_api_gpt-5.4_20260506_045743.json \\
-    benchmark/report/medhall/full-20260520_*_20260506_*.json
+    benchmark/report/eslbench/sample50-20260331_llm_api_gpt-5.4_20260506_045743.json \\
+    benchmark/report/eslbench_distractor/sample_*_20260506_*.json
 """
 
 from __future__ import annotations
@@ -77,12 +77,12 @@ def _restore_memory(trace: dict) -> list[TestAgentMemory]:
 
 
 _KNOWN_TARGET_TYPES = (
-    "theta_smart_api",
-    "theta_miroflow",
-    "theta_api",
     "hippo_rag_api",
     "dyg_rag_api",
     "naive_rag_api",
+    "hermes",
+    "evermem",
+    "mem0_rag_api",
     "llm_api",
 )
 
@@ -116,11 +116,16 @@ def _resolve_dataset(report_path: Path) -> Path:
 
     Naming: {dataset}_{target_label}_{YYYYMMDD_HHMMSS}.json under benchmark/report/{benchmark}/
     """
+    from evaluator.utils.benchmark_reader import resolve_dataset
+
     parts = _parse_filename_tokens(report_path)
     # Conservative: take the first token as dataset (works for "full-20260430_..." / "sample_...")
     dataset = parts[0] if parts else report_path.stem
     benchmark = report_path.parent.name
-    candidate = report_path.parents[2] / "data" / benchmark / f"{dataset}.jsonl"
+    # Through the shared resolver, so re-scoring a report finds a fetched bank the
+    # same way the original run did. Resolving it here on its own meant a report
+    # produced from a fetched release could not be re-scored at all.
+    candidate, _ = resolve_dataset(benchmark, dataset)
     if not candidate.exists():
         raise FileNotFoundError(f"Cannot resolve source dataset for {report_path} (tried {candidate})")
     return candidate
@@ -151,14 +156,15 @@ async def re_eval_one(report_path: Path, max_concurrency: int = 8) -> Path:
     report = json.loads(report_path.read_text(encoding="utf-8"))
 
     # Reconstruct session_info from each case's original target_type so contextual cases
-    # are judged with the right is_theta_target flag. Theta family and RAG variants are
-    # always record-aware. For llm_api, also treat tool_context.user_email (from the case's
-    # target_overrides) as user-data access — that's the tool-based retrieval path used
-    # by MedHall contextual cases against base LLMs.
+    # are judged with the right has_user_data flag. Only hippo_rag_api / dyg_rag_api are
+    # assumed record-aware unconditionally — the other RAG targets fall through to the
+    # per-case override lookup below, and get has_user_data=False when the case carries no
+    # override key for them. For llm_api, tool_context.user_email counts as user-data
+    # access — that's the tool-based retrieval path used when evaluating base LLMs.
     def _build_session_info(orig_target_type: str | None, item: object) -> SessionInfo | None:
         if not orig_target_type:
             return None
-        if orig_target_type.startswith("theta") or orig_target_type in ("hippo_rag_api", "dyg_rag_api"):
+        if orig_target_type in ("hippo_rag_api", "dyg_rag_api"):
             return SessionInfo(user_token="", has_user_data=True)
         overrides = getattr(getattr(item, "user", None), "target_overrides", None) or {}
         case_override = overrides.get(orig_target_type) or {}

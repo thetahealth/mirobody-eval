@@ -8,7 +8,7 @@ Based on evaluator/utils/llm.py do_execute interface, supports all integrated mo
 compatible with TestCase.history field.
 
 User-level params (LlmApiTargetInfo):
-    model: Model name (required, e.g. gpt-5.2 / gemini-3-pro)
+    model: Model name (required, e.g. gpt-5.2 / gemini-3-pro-preview)
     system_prompt: System prompt (optional)
 
 Infrastructure params (read from env vars, managed by do_execute / init_chat_model):
@@ -45,7 +45,7 @@ _BENCHMARK_DATA_DIR = Path(__file__).resolve().parents[3] / "benchmark" / "data"
 # ESLBench 题面可能为中英文；基模默认用英文回答会被 kg_qa 判负。检测题面语言并在
 # system_prompt 尾部追加语言指令，让基模用与提问一致的语言作答。仅对 eslbench/retrieve
 # 作用域生效（见 LlmApiTargetAgent._generate_next_reaction 的 scope gate），其它 llm_api
-# benchmark（healthbench / aq_redteam ...）行为字节级不变。
+# benchmark（healthbench / medcalc ...）行为字节级不变。
 # CJK Ext-A (㐀-䶿) + Unified (一-鿿) + Compat Ideographs (豈-﫿)
 _CJK_RE = re.compile(r"[㐀-鿿豈-﫿]")
 _LANG_DIRECTIVE = {"zh": "\n\nReply in Chinese (请用中文回答).", "en": ""}
@@ -118,39 +118,12 @@ class LlmApiTargetInfo(BaseModel):
         },
     )
     type: Literal["llm_api"] = Field(description="Target type")
-    model: Literal[
-        "gpt-5.4",
-        "gpt-5.4-mini",
-        "gpt-5.2",
-        "gpt-4.1",
-        "gemini-3.1-pro-preview",
-        "gemini-3.1-flash-lite-preview",
-        "gemini-3-pro-preview",
-        "gemini-3-flash-preview",
-        "gemini-3.5-flash",
-        "anthropic/claude-opus-4.6",
-        "anthropic/claude-sonnet-4.6",
-        "minimax/minimax-m2.7",
-        "z-ai/glm-5.1",
-        "z-ai/glm-5.2",
-        "moonshotai/kimi-k3",
-        "kimi-k3",
-        "gpt-5.5",
-        "google/gemini-3-flash-preview",
-        "google/gemini-3.5-flash",
-        "google/gemini-3.1-pro-preview",
-        "moonshotai/kimi-k2.6",
-        "deepseek/deepseek-v4-pro",
-        "minimax/minimax-m3",
-        "qwen/qwen3.7-max",
-        # nova 中转 per-call("[次]"计费档);以 "[" 开头 → 走 llm.py 的 OpenAI 兼容 base_url 分支
-        "[次]gemini-3-flash-preview",
-        "[次]gemini-3.1-pro-preview",
-        "[次]gemini-3.1-pro-preview-thinking",
-        "[次]claude-sonnet-4-6",
-        "[次]gemini-3.5-flash",
-        "glm-5.2",
-    ] = Field(description="Model name")
+    model: str = Field(
+        min_length=1,
+        pattern=r"\S",
+        description="Provider model ID, e.g. gpt-5.4-mini, openai/gpt-5-mini, or dashscope:qwen3.5-flash",
+        examples=["gpt-5.4-mini", "openai/gpt-5-mini", "dashscope:qwen3.5-flash"],
+    )
     system_prompt: Optional[str] = Field(None, description="System prompt (uses default prompt if not specified)")
     tool_group: Optional[str] = Field(
         None,
@@ -252,7 +225,7 @@ class LlmApiTargetAgent(AbstractTargetAgent, name="llm_api", params_model=LlmApi
         system_prompt = self.config.system_prompt or _DEFAULT_SYSTEM_PROMPT
 
         # V2-1 SCOPE GATE: language awareness only for the eslbench retrieve tool group.
-        # Any other llm_api benchmark (healthbench / aq_redteam / ...) is byte-for-byte unchanged.
+        # Any other llm_api benchmark (healthbench / medcalc / ...) is byte-for-byte unchanged.
         if getattr(self.config, "tool_group", None) == "eslbench/retrieve":
             override = os.environ.get("HOLYEVAL_ESLBENCH_TARGET_LANG", "auto").lower()
             lang = override if override in ("en", "zh") else (self._lang or _detect_lang(user_text))

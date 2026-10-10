@@ -79,9 +79,14 @@ argument-hint: [focus-area] # 可选: gitops | plugin | reuse | all(默认)
    - **禁止**: 直接导入具体实现类
 
 3. **Schema 集中定义**
-   - 所有 Discriminated Union 成员（`EvalInfo`, `TargetInfo`, `UserInfo`）定义在 `evaluator/core/schema.py`
-   - Plugin 文件中不定义新的 `*Info` 配置类
-   - 运行: `rg 'class \w+Info\(BaseModel\)' evaluator/plugin/`
+   - `EvalInfo` / `TargetInfo` 在 `evaluator/core/schema.py` 里是
+     `Annotated[Any, BeforeValidator(...)]`，按注册表动态分发
+   - 每个插件的 `*Info` 配置类与实现**同文件**，用 `params_model=` 注册
+   - **EvalAgent / TargetAgent** 必须传 `params_model=`:
+     `rg 'Abstract(Eval|Target)Agent,' -A3 evaluator/plugin/ | rg -c params_model`
+   - **TestAgent 不收 `params_model`**（`abstract_test_agent.py:43` 的 `__init_subclass__`
+     只接受 `name`），它用类属性 `_config_model` 的字符串名。给 TestAgent 传
+     `params_model=` 会直接 `TypeError`
 
 4. **Registry 反射使用**
    - `evaluator/utils/agent_inspector.py` 通过 `get_all()` 反射发现 plugin
@@ -94,8 +99,8 @@ argument-hint: [focus-area] # 可选: gitops | plugin | reuse | all(默认)
    - 每个匹配应只在自己的 `__init__.py` 中（注册用）
 
 6. **自动派生检查**
-   - `bench_schema.py` 中的 `_TARGET_TYPE_MAP` 通过 `_derive_target_type_map()` 自动从 Union 派生
-   - `agent_inspector.py` 中的 config map 从 Discriminated Union 自动派生
+   - `bench_schema.py` 的 `_get_target_type_map()` 从 `AbstractTargetAgent._params_registry` 派生
+   - `agent_inspector.py` 的 config map 同样从各插件的 `params_model` 派生
    - 不存在手动维护的 type→class 映射表
 
 ### 输出模板

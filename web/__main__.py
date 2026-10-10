@@ -1,4 +1,4 @@
-"""python -m web — start HolyEval Web UI"""
+"""python -m web — start mirobody-eval Web UI"""
 
 import logging
 import os
