@@ -1,4 +1,5 @@
-<!-- Tag group stats card — requires parent Alpine scope to provide tagStats object
+<!-- Tag group stats card — requires the parent Alpine scope to provide a tagStats object,
+     plus the page's tag filter (selectedTags + setTagFilter): clicking a "cat:val" tag filters the case list
      (key=tag, value={total, pass_count, fail_count, error_count, pass_rate, avg_score}).
      `error_count` are cases that never got graded (timeout, judge outage, cancelled);
      they are excluded from avg_score, which is why the average is annotated with the
@@ -23,9 +24,9 @@
                 <template x-for="[tag, s] in Object.entries(tagStats).sort((a, b) => b[1].total - a[1].total)" :key="tag">
                     <tr class="border-b border-border/50 hover:bg-muted/30 transition-colors">
                         <td class="py-2 pr-4">
-                            <button @click="selectedTag = selectedTag === tag ? '' : tag; page = 1"
+                            <button @click="setTagFilter(tag.split(':')[0], selectedTags[tag.split(':')[0]] === tag.slice(tag.indexOf(':') + 1) ? '' : tag.slice(tag.indexOf(':') + 1)); page = 1"
                                     class="px-2 py-0.5 rounded-full text-[11px] transition-colors cursor-pointer"
-                                    :class="selectedTag === tag ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'"
+                                    :class="selectedTags[tag.split(':')[0]] === tag.slice(tag.indexOf(':') + 1) ? 'bg-primary text-primary-foreground' : 'bg-secondary hover:bg-secondary/80'"
                                     x-text="tag"></button>
                         </td>
                         <td class="text-right py-2 px-3 tabular-nums" x-text="s.total"></td>
