@@ -1505,7 +1505,11 @@ class KgQaEvalAgent(AbstractEvalAgent, name="kg_qa", params_model=KgQaEvalInfo):
                     model=self.model,
                     system_prompt="你是精确的健康数据 QA 行为评估专家,只输出 JSON。",
                     input=prompt,
-                    max_tokens=300,
+                    # A reasoning-model judge spends its reasoning tokens out of this same
+                    # budget. Measured on behavioral cases: median 99, max 786. At 300 the
+                    # JSON came back truncated or empty, failed to parse, and after three tries
+                    # the case was recorded as ungraded.
+                    max_tokens=2000,
                 )
                 self._accumulate_cost(result.usage)
 
