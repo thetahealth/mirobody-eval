@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import re
@@ -42,6 +43,60 @@ def _resolve_dataset_and_target(prefix: str, bench_name: str) -> tuple[str, str]
     return prefix, ""
 
 
+def _add_usage(acc: dict[str, dict[str, Any]], usage: dict[str, Any] | None) -> None:
+    """Sum {model: {input_tokens, output_tokens, input_token_details.cache_read}} into acc."""
+    for model, u in (usage or {}).items():
+        if not isinstance(u, dict):
+            continue
+        a = acc.setdefault(model, {"input_tokens": 0, "output_tokens": 0, "input_token_details": {"cache_read": 0}})
+        a["input_tokens"] += u.get("input_tokens") or 0
+        a["output_tokens"] += u.get("output_tokens") or 0
+        a["input_token_details"]["cache_read"] += (u.get("input_token_details") or {}).get("cache_read") or 0
+
+
+@functools.lru_cache(maxsize=1024)
+def _summarize_report(path: str, mtime_ns: int, size: int) -> dict[str, Any]:
+    """Case count, average, ungraded count and summed usage of one report file.
+
+    Keyed on (path, mtime, size) so an unchanged file is parsed once per process. The
+    average follows the report page and the CLI: `error` cases have no grade and stay out
+    of it. Usage is summed, not priced: the page prices it with the same table it uses
+    for a single report, so the list and the report always show the same amount.
+    """
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    cases = data.get("cases") or []
+    graded = [
+        c["eval"]["score"]
+        for c in cases
+        if (c.get("eval") or {}).get("result") not in (None, "error") and c["eval"].get("score") is not None
+    ]
+    usage: dict[str, Any] = {"test": {}, "target": {}, "eval": {}, "target_api_cost": 0.0}
+    for c in cases:
+        cost = c.get("cost") or {}
+        _add_usage(usage["test"], cost.get("test"))
+        _add_usage(usage["eval"], cost.get("eval"))
+        api_cost = (cost.get("target_detail") or {}).get("total_cost")
+        if api_cost is not None:
+            usage["target_api_cost"] += api_cost
+        else:
+            _add_usage(usage["target"], cost.get("target"))
+    return {
+        "case_count": len(cases),
+        "avg_score": sum(graded) / len(graded) if graded else None,
+        "error_count": sum(1 for c in cases if (c.get("eval") or {}).get("result") == "error"),
+        "usage": usage,
+    }
+
+
+def _report_summary(report_file: Path) -> dict[str, Any]:
+    st = report_file.stat()
+    try:
+        return _summarize_report(str(report_file), st.st_mtime_ns, st.st_size)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        logger.warning("[report] cannot summarize %s: %s", report_file, e)
+        return {}
+
+
 def list_reports() -> list[ReportEntry]:
     """列出所有报告文件（按时间倒序，最新在前）"""
     if not _REPORT_DIR.is_dir():
@@ -66,6 +121,7 @@ def list_reports() -> list[ReportEntry]:
                         date=date,
                         filename=report_file.name,
                         target_label=target_label,
+                        **_report_summary(report_file),
                     )
                 )
 
