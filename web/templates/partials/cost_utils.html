@@ -1,36 +1,11 @@
-{# Shared cost calculation utilities — used by tasks/detail.html and reports/detail.html #}
+{# Shared cost calculation utilities — used by tasks/detail.html and reports/detail.html.
+   _calcUsageCost and _formatCost live in cost_pricing.html, next to the price table they read. #}
 {% include "partials/cost_pricing.html" %}
 <script>
-function _calcUsageCost(usageDict) {
-    /* Calculate USD cost from {model: {input_tokens, output_tokens, input_token_details?}}
-       input_token_details.cache_read uses discounted rate, rest uses full price */
-    let cost = 0;
-    if (!usageDict) return cost;
-    for (const [model, usage] of Object.entries(usageDict)) {
-        const p = _tokenPricing[model] || _defaultPricing;
-        const totalInput = usage.input_tokens || 0;
-        const cachedInput = usage.input_token_details?.cache_read || 0;
-        const freshInput = totalInput - cachedInput;
-        cost += freshInput * p.input / 1e6;
-        cost += cachedInput * (p.cached_input ?? p.input) / 1e6;
-        cost += (usage.output_tokens || 0) * p.output / 1e6;
-    }
-    return cost;
-}
-
 /** Extract target cost — prefers API-returned total_cost, falls back to token estimation */
 function _targetCostFromDetail(cost) {
     if (cost?.target_detail?.total_cost != null) return cost.target_detail.total_cost;
     return _calcUsageCost(cost?.target);
-}
-
-function _formatCost(usd) {
-    if (usd === 0) return '—';
-    if (usd < 0.001) return '<$0.001';
-    if (usd < 0.01) return '$' + usd.toFixed(4);
-    if (usd < 1) return '$' + usd.toFixed(3);
-    if (usd < 100) return '$' + usd.toFixed(2);
-    return '$' + Math.round(usd);
 }
 
 function _sumTokens(usageDict, field) {

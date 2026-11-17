@@ -48,4 +48,32 @@ const _modelMeta = {
     'minimax/minimax-m2.7':     { price: '0.30', date: '2026-04' },
     'z-ai/glm-5.1':            { price: '0.95', date: '2026-04' },
 };
+
+/* ===== Pricing a usage dict — shared by every page that includes this table ===== */
+function _calcUsageCost(usageDict) {
+    /* Calculate USD cost from {model: {input_tokens, output_tokens, input_token_details?}}
+       input_token_details.cache_read uses discounted rate, rest uses full price */
+    let cost = 0;
+    if (!usageDict) return cost;
+    for (const [model, usage] of Object.entries(usageDict)) {
+        const p = _tokenPricing[model] || _defaultPricing;
+        const totalInput = usage.input_tokens || 0;
+        const cachedInput = usage.input_token_details?.cache_read || 0;
+        const freshInput = totalInput - cachedInput;
+        cost += freshInput * p.input / 1e6;
+        cost += cachedInput * (p.cached_input ?? p.input) / 1e6;
+        cost += (usage.output_tokens || 0) * p.output / 1e6;
+    }
+    return cost;
+}
+
+function _formatCost(usd) {
+    if (usd === 0) return '—';
+    if (usd < 0.001) return '<$0.001';
+    if (usd < 0.01) return '$' + usd.toFixed(4);
+    if (usd < 1) return '$' + usd.toFixed(3);
+    if (usd < 100) return '$' + usd.toFixed(2);
+    return '$' + Math.round(usd);
+}
+
 </script>

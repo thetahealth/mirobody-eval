@@ -887,3 +887,13 @@ class ReportEntry(BaseModel):
     date: str
     filename: str
     target_label: str = ""
+    # Summary for the report list; None when the file could not be read.
+    case_count: int | None = None
+    avg_score: float | None = Field(None, description="Mean score over graded cases; `error` cases are excluded")
+    error_count: int | None = Field(None, description="Cases that never got a grade (timeout, judge outage, ...)")
+    usage: dict[str, Any] | None = Field(
+        None,
+        description="Token usage summed over cases, for pricing on the page: {test|target|eval: {model: usage}} "
+        "plus target_api_cost, the USD the target API reported itself (those cases' target tokens are not in "
+        "`target`, so nothing is counted twice)",
+    )
