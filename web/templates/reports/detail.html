@@ -191,10 +191,10 @@
             </div>
             <div class="divide-y divide-border">
                 <template x-for="(c, idx) in pagedCases" :key="c.id || idx">
-                    <div>
+                    <div :id="'case-' + c.id" class="scroll-mt-4">
                         <!-- Row -->
                         <div class="px-5 py-3 table-row-hover cursor-pointer"
-                             @click="expandedCase = expandedCase === c.id ? null : c.id">
+                             @click="toggleCase(c.id)">
                             <div class="flex items-center gap-3">
                                 <svg class="w-3.5 h-3.5 text-muted-foreground shrink-0 transition-transform duration-150"
                                      :class="expandedCase === c.id && 'rotate-90'"
@@ -352,6 +352,31 @@ function reportViewer(benchmark, filename) {
             } finally {
                 this.loading = false;
             }
+            if (!this.error) this.$nextTick(() => this.openCaseFromHash());
+            window.addEventListener('hashchange', () => this.openCaseFromHash());
+        },
+
+        // A case is addressable as `<report url>#case=<case id>`: expanding one writes the
+        // fragment, and opening such a link turns to that case's page, expands it and scrolls to it.
+        toggleCase(id) {
+            this.expandedCase = this.expandedCase === id ? null : id;
+            const base = location.pathname + location.search;
+            history.replaceState(null, '', this.expandedCase ? base + '#case=' + encodeURIComponent(id) : base);
+        },
+        openCaseFromHash() {
+            const m = location.hash.match(/^#case=(.+)$/);
+            if (!m) return;
+            const id = decodeURIComponent(m[1]);
+            let idx = this.filteredCases.findIndex(c => c.id === id);
+            if (idx < 0 && this.cases.some(c => c.id === id)) {
+                // Hidden by a filter: clear the filters so the linked case can be shown.
+                this.selectedTags = {}; this.filter = 'all';
+                idx = this.filteredCases.findIndex(c => c.id === id);
+            }
+            if (idx < 0) return;
+            this.page = Math.floor(idx / this.pageSize) + 1;
+            this.expandedCase = id;
+            this.$nextTick(() => document.getElementById('case-' + id)?.scrollIntoView({ block: 'start' }));
         },
 
         computeStats() {
