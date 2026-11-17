@@ -12,6 +12,7 @@
 - query_duckdb DuckDB 只读 SQL 查询
 """
 
+import io
 import json
 import logging
 import os
@@ -1640,8 +1641,7 @@ def _hydrate_device_indicators(con: Any, ctx: ToolContext) -> None:
         )
         """
     )
-    if rows:
-        con.executemany("INSERT INTO device_indicators VALUES (?, ?, ?, ?, ?, ?)", rows)
+    _bulk_insert(con, "device_indicators", ("user_id", "time", "indicator", "device_type", "value", "unit"), rows)
 
 
 def _hydrate_exam_indicators(con: Any, ctx: ToolContext) -> None:
@@ -1688,8 +1688,28 @@ def _hydrate_exam_indicators(con: Any, ctx: ToolContext) -> None:
         )
         """
     )
-    if rows:
-        con.executemany("INSERT INTO exam_indicators VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+    _bulk_insert(
+        con,
+        "exam_indicators",
+        ("user_id", "time", "indicator", "exam_type", "exam_location", "value", "unit"),
+        rows,
+    )
+
+
+def _bulk_insert(con: Any, table: str, columns: tuple[str, ...], rows: list[tuple[Any, ...]]) -> None:
+    """Load rows into a table in one statement.
+
+    `executemany` prepares and runs the INSERT once per row: about 40 s for one ESL-Bench user's
+    ~80k device readings, paid on the first query against that user. The rows go through an
+    in-memory NDJSON buffer instead, read with every column as VARCHAR so DuckDB applies the same
+    casts the per-row INSERT did (`time` to TIMESTAMP on insert, nothing else).
+    """
+    if not rows:
+        return
+    buf = io.BytesIO(
+        b"\n".join(json.dumps(dict(zip(columns, row)), ensure_ascii=False).encode("utf-8") for row in rows)
+    )
+    con.read_json(buf, format="newline_delimited", columns={c: "VARCHAR" for c in columns}).insert_into(table)
 
 
 def _hydrate_events(con: Any, ctx: ToolContext) -> None:
