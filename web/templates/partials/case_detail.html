@@ -146,7 +146,7 @@
                                 </div>
                             </div>
                         </template>
-                        <div class="whitespace-pre-wrap break-words" x-text="msg.content"></div>
+                        <div class="prose-readme answer-md break-words" x-html="renderAnswerMarkdown(msg.content)"></div>
                         <div x-show="msg.time" class="text-[10px] text-muted-foreground mt-1.5" x-text="msg.time"></div>
                     </div>
                 </div>
