@@ -40,15 +40,19 @@ class JudgeUnavailable(RuntimeError):
 # ANSWER: line extraction (prefer extracting answer from structured output)
 # ============================================================
 
-_ANSWER_LINE_RE = re.compile(
-    r"(?:^|\n)\s*ANSWER\s*:\s*(.+?)(?:\n|$)"
-)
+# One ANSWER: line, read to the end of that line only — an empty `ANSWER:` stays empty instead of
+# borrowing whatever is written on the next line.
+_ANSWER_LINE_RE = re.compile(r"^[ \t]*ANSWER[ \t]*:[ \t]*([^\r\n]*)", re.MULTILINE | re.IGNORECASE)
 
 
 def _extract_answer_line(text: str) -> Optional[str]:
-    """Extract ANSWER: line content from response, returns None if not found"""
-    m = _ANSWER_LINE_RE.search(text)
-    return m.group(1).strip() if m else None
+    """The final ANSWER: line, or None if there is none.
+
+    A response that drafts `ANSWER: 30` and later corrects itself to `ANSWER: 36` has answered 36.
+    An explicitly empty final line is returned as "" and is not replaced by an earlier one.
+    """
+    lines = _ANSWER_LINE_RE.findall(text)
+    return lines[-1].strip() if lines else None
 
 
 def _word_boundary_match(pattern: str, text: str) -> bool:
@@ -1338,8 +1342,7 @@ class KgQaEvalAgent(AbstractEvalAgent, name="kg_qa", params_model=KgQaEvalInfo):
         """
         import re as _re
         tok = str(sd.get("contract_reject_token") or "premise-incorrect").lower()
-        lines = _re.findall(r"ANSWER:\s*(.+)", response_text or "")
-        raw = (lines[-1] if lines else "").strip().strip("*`。.").lower()
+        raw = (_extract_answer_line(response_text or "") or "").strip("*`。.").lower()
         gold, decoy = sd.get("gold_value"), sd.get("decoy_value")
 
         rejected = tok in raw
@@ -1412,8 +1415,7 @@ class KgQaEvalAgent(AbstractEvalAgent, name="kg_qa", params_model=KgQaEvalInfo):
         """
         import re as _re
         tok = str(sd.get("contract_reject_token") or "premise-incorrect").lower()
-        lines = _re.findall(r"ANSWER:\s*(.+)", response_text or "")
-        raw = (lines[-1] if lines else "").strip().strip("*`。.").lower()
+        raw = (_extract_answer_line(response_text or "") or "").strip("*`。.").lower()
 
         rejected = tok in raw
         num = None
