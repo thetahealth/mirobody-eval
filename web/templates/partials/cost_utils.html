@@ -162,6 +162,26 @@ function _caseCostTotalTokens(c, field) {
 /* ---- Agent config display utilities ---- */
 
 /** Extract displayable [key, value] entries from a config dict */
+// Gold answer of a case, as text, or null when its evaluator declares none
+// (kg_qa: expected_value, medcalc: ground_truth; rubric-style evaluators have neither).
+function _caseExpected(c) {
+    const cfg = c?.eval_config || {};
+    const v = cfg.expected_value ?? cfg.ground_truth;
+    if (v === undefined || v === null || v === '') return null;
+    return Array.isArray(v) ? v.join('; ') : String(v);
+}
+
+// The answer the target committed to: its last `ANSWER:` line, read the way kg_qa
+// grades it (line-anchored, case-insensitive, last one wins). Without such a line the
+// last reply is returned, marked so the viewer knows it is not what was graded.
+function _caseFinalAnswer(dialogue) {
+    const replies = (dialogue || []).filter(m => m.role === 'target' && m.content);
+    const last = replies.length ? String(replies[replies.length - 1].content) : '';
+    const lines = [...last.matchAll(/^[ \t]*ANSWER[ \t]*:[ \t]*([^\r\n]*)/gim)];
+    if (lines.length) return { text: lines[lines.length - 1][1].trim(), fromAnswerLine: true };
+    return { text: last.length > 400 ? last.slice(0, 400) + '…' : last, fromAnswerLine: false };
+}
+
 function _configEntries(cfg) {
     if (!cfg) return [];
     return Object.entries(cfg).filter(([k, v]) => v != null);

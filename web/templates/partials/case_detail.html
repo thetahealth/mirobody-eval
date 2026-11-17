@@ -17,6 +17,22 @@
     <div class="text-xs" x-show="caseData?.cost"><span class="text-muted-foreground">Cost</span> <span class="font-medium ml-1" x-text="caseCostLabel(caseData)"></span></div>
 </div>
 
+<!-- Expected vs model answer: the two things a reader compares first, side by side -->
+<div x-show="_caseExpected(caseData) !== null" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <div class="rounded-lg bg-card border border-border px-3 py-2.5">
+        <div class="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">Expected</div>
+        <div class="text-sm font-medium break-words whitespace-pre-wrap" x-text="_caseExpected(caseData)"></div>
+    </div>
+    <div class="rounded-lg bg-card border border-border px-3 py-2.5">
+        <div class="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">
+            Model answer<span x-show="!_caseFinalAnswer(getCaseDialogue(caseData)).fromAnswerLine"
+                              class="normal-case tracking-normal"> · no ANSWER: line, last reply shown</span>
+        </div>
+        <div class="text-sm font-medium break-words whitespace-pre-wrap"
+             x-text="_caseFinalAnswer(getCaseDialogue(caseData)).text || '—'"></div>
+    </div>
+</div>
+
 <!-- Agent Config -->
 <div x-show="caseData?.target_config || caseData?.eval_config">
     <div class="text-xs font-medium text-muted-foreground mb-1.5">Agent Config</div>
