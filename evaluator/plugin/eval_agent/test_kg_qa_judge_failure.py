@@ -23,6 +23,7 @@ import pytest
 from evaluator.core.schema import SessionInfo
 from evaluator.plugin.eval_agent import kg_qa_eval_agent as mod
 from evaluator.plugin.eval_agent.kg_qa_eval_agent import JudgeUnavailable, KgQaEvalAgent, KgQaEvalInfo
+from evaluator.utils.llm import ExecuteResult
 
 _DATA = Path(__file__).resolve().parents[3] / "benchmark" / "data"
 # behavioral 题只在 distractor 语料里，所以两份都扫 —— 否则那条测试会永远 skip，
@@ -123,3 +124,28 @@ async def test_judge_unavailable_never_escapes_to_the_framework(judge_is_down):
         pytest.fail(f"JudgeUnavailable 漏到了 run() 外面: {e}")
 
     assert result.result == "error"
+
+
+async def test_behavioral_judge_leaves_room_for_reasoning_tokens(monkeypatch):
+    """推理模型当判分器时，reasoning token 也算在 `max_tokens` 里。
+
+    上限原先是 300：判分器想完之前就被截断，JSON 为空 → 解析失败 → 三次后记成
+    「未判成」。实测判成功的行为题 reasoning 中位 99、最高 786 token。这里让假判分器
+    先花掉 786 token 再写 JSON，上限不够就交回空串 —— 和真实截断同形。
+    """
+    reasoning_tokens = 786
+    verdict = json.dumps(
+        {"gave_magnitude": False, "affirmed_premise": False, "challenged": True, "explanation": "ok"}
+    )
+
+    async def _reasoning_judge(*_args, max_tokens=None, **_kwargs):
+        budget_left = (max_tokens or 0) - reasoning_tokens
+        content = verdict if budget_left >= len(verdict) else ""
+        return ExecuteResult(content=content, usage={}, time_cost=0)
+
+    monkeypatch.setattr(mod, "do_execute", _reasoning_judge)
+    cfg, expected = _config("behavioral")
+
+    result = await _agent(cfg, expected).run([], SessionInfo(user_id="u", user_token="t", has_user_data=True))
+
+    assert result.result != "error", result.feedback
