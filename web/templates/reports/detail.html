@@ -114,9 +114,7 @@
         </div>
 
         <!-- Tag stats -->
-        <div x-data="{ get tagStats() { return $root.tagStatsData } }">
-            {% include "partials/tag_stats.html" %}
-        </div>
+        {% include "partials/tag_stats.html" %}
 
         <!-- Case list -->
         <div class="rounded-lg border border-border bg-card">
@@ -305,7 +303,7 @@ function reportViewer(benchmark, filename) {
             if (val) { this.selectedTags = { ...this.selectedTags, [cat]: val }; }
             else { const { [cat]: _, ...rest } = this.selectedTags; this.selectedTags = rest; }
         },
-        get tagStatsData() {
+        get tagStats() {
             if (this._reportTagStats && Object.keys(this._reportTagStats).length > 0) return this._reportTagStats;
             return this._computeTagStats();
         },
