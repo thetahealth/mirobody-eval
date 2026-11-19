@@ -1545,7 +1545,7 @@ sdist = { url = "https://files.pythonhosted.org/packages/cf/7a/1a9b1405f2eb59515
 
 [[package]]
 name = "holyeval-benchmark"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "benchmark" }
 dependencies = [
     { name = "duckdb" },
@@ -1564,7 +1564,7 @@ requires-dist = [
 
 [[package]]
 name = "holyeval-evaluator"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "evaluator" }
 dependencies = [
     { name = "aiohttp" },
@@ -1615,7 +1615,7 @@ provides-extras = ["rag"]
 
 [[package]]
 name = "holyeval-generator"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "generator" }
 dependencies = [
     { name = "duckdb" },
@@ -1634,7 +1634,7 @@ requires-dist = [
 
 [[package]]
 name = "holyeval-web"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "web" }
 dependencies = [
     { name = "fastapi" },
@@ -2825,7 +2825,7 @@ parse = [
 
 [[package]]
 name = "mirobody-eval"
-version = "0.1.0"
+version = "0.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "holyeval-benchmark" },

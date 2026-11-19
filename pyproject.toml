@@ -1,6 +1,6 @@
 [project]
 name = "mirobody-eval"
-version = "0.1.0"
+version = "0.2.0"
 description = "Evaluation for mirobody — seed a synthetic user, score your deployment, reproduce any published benchmark"
 requires-python = ">=3.11"
 readme = "README.md"
