@@ -116,11 +116,13 @@ uv run python -m web                    # http://localhost:8000
 > to the requested models. This configures the evaluation process; a mirobody
 > deployment needs its own model and embedding configuration.
 >
-> **ESLBench data prep:** Run `uv run python -m generator.eslbench.prepare_data`
-> before evaluating ESLBench (also started in the background by the Web UI; wait
-> for it to finish). It checks all manifest batches and downloads missing or changed
-> batches, including user data and question banks, then builds DuckDB files. It is
-> not a single-user download and can take substantial disk space and time. Other
+> **ESLBench data prep:** Run `uv run python -m generator.eslbench.prepare_data --dataset sample50-20260331`
+> before evaluating that dataset. It syncs the manifest and every question bank, then
+> downloads only the users the dataset's questions point at (27 for this one, about
+> 0.5 GB) and builds their DuckDB files. Without `--dataset` it prepares every
+> published batch, which takes several GB. The Web UI does this for you: at startup
+> it syncs the question banks, and when you start a run it fetches whatever that
+> dataset still needs; start the run again once preparation finishes. Other
 > benchmarks ship their question files with the repository.
 
 If you only have a Google or DashScope key, also select models for the roles that
@@ -154,8 +156,8 @@ Install the optional dependency before seeding (it requires Python 3.12+):
 # 1. Install the engine integration
 uv sync --extra mirobody --python 3.12
 
-# 2. Prepare all missing or changed ESLBench batches (not just one user)
-uv run python -m generator.eslbench.prepare_data
+# 2. Prepare the users of the dataset you will run
+uv run python -m generator.eslbench.prepare_data --dataset sample200-20260430
 
 # 3. Point to your deployment; replace both values with your actual settings
 export MIROBODY_CONFIG=/abs/path/to/your/mirobody/config.localdb.yaml
@@ -390,8 +392,8 @@ Key findings: DB agents (48–58%) substantially outperform memory RAG (30–38%
 **Data preparation required** — ESLBench downloads user data from HuggingFace and builds per-user DuckDB indexes:
 
 ```bash
-# First time: prepare data (automatic via Web UI, manual for CLI)
-uv run python -m generator.eslbench.prepare_data
+# First time: prepare the dataset's data (automatic via Web UI, manual for CLI)
+uv run python -m generator.eslbench.prepare_data --dataset sample50-20260331
 
 # Quick test: start with 3 cases to verify setup
 uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-type llm_api --target-model gpt-5.4-mini --limit 3
@@ -480,8 +482,9 @@ Use `/add-eval-agent` or `/add-target-agent` Claude Code skills for guided scaff
 
 ```bash
 # Prepare benchmark data (required for ESLBench; other benchmarks ship with data)
-uv run python -m generator.eslbench.prepare_data          # download HF data + build DuckDB
-uv run python -m generator.eslbench.prepare_data --force   # force rebuild
+uv run python -m generator.eslbench.prepare_data --dataset <dataset>   # just the users <dataset> needs
+uv run python -m generator.eslbench.prepare_data                       # every published batch
+uv run python -m generator.eslbench.prepare_data --force               # re-download + rebuild
 
 # Run benchmark
 uv run python -m benchmark.basic_runner <benchmark> <dataset> [options]

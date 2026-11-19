@@ -1,5 +1,6 @@
 {
   "description": "ESLBench distractor primitives 2/6/8 (local eval; evaluator=kg_qa per item)",
+  "prepare": "generator.eslbench.prepare_data",
   "target": [
     {
       "type": "llm_api",

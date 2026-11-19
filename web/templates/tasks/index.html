@@ -679,7 +679,7 @@ function taskManager() {
         },
         get canSubmit() {
             if (!this.form.benchmark || !this.form.dataset) return false;
-            if (this.prepareStatus === 'running' || this.prepareStatus === 'error') return false;
+            if (this.prepareStatus === 'running') return false;  // after an error, Run retries the preparation
             if (!this.form.target_type) return false;
             for (const f of this.targetFields) {
                 if (f.required && !this.targetValues[f.name]) return false;

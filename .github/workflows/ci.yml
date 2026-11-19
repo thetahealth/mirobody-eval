@@ -35,7 +35,7 @@ jobs:
           python-version: "3.11"
       - run: uv sync --group dev
       - name: Unit tests that ship with the repo
-        run: uv run python -m pytest generator/ evaluator/ benchmark/data/eslbench/tools/ -q
+        run: uv run python -m pytest generator/ evaluator/ benchmark/data/eslbench/tools/ web/ -q
       - name: Plugin registries load
         run: |
           uv run python - <<'PY'

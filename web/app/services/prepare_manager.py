@@ -1,13 +1,18 @@
 """PrepareManager — manages background execution of benchmark prepare scripts
 
 Benchmarks declaring a "prepare" field (Python module path) in metadata.json
-are automatically executed asynchronously on Web UI startup. Benchmarks are
-unavailable for task creation while preparation is in progress.
+share one script per module. On Web UI startup it runs once with `--banks-only`:
+the question banks and the manifest, not the user data. Before a task starts,
+`prepare_dataset` asks the module which users that dataset still needs
+(`missing_users(benchmark, dataset)`) and, if any, runs it with
+`--benchmark <b> --dataset <d>` to fetch just those. Benchmarks are unavailable
+for task creation while their module's script is running.
 """
 
 from __future__ import annotations
 
 import asyncio
+import importlib
 import logging
 import os
 import sys
@@ -58,8 +63,9 @@ def _report_to_sentry(
 class PrepareEntry:
     """Preparation status for a single benchmark"""
 
-    benchmark: str
-    module_path: str  # e.g. "generator.theta_benchmark.build_datasets"
+    benchmark: str  # the benchmark the run was started for
+    module_path: str  # e.g. "generator.eslbench.prepare_data"
+    args: list[str] = field(default_factory=list)
     status: str = "running"  # running | completed | error
     started_at: datetime = field(default_factory=datetime.now)
     finished_at: datetime | None = None
@@ -71,18 +77,22 @@ class PrepareManager:
     """Manages benchmark prepare scripts (executed on Web startup, process-isolated)"""
 
     def __init__(self) -> None:
+        # Keyed by module: benchmarks sharing a module share its data directory,
+        # so they share one run and one status.
         self._entries: dict[str, PrepareEntry] = {}
+        self._modules: dict[str, str] = {}  # benchmark -> prepare module
 
     # ==================== Query ====================
 
     def get_status(self, benchmark: str) -> PrepareEntry | None:
-        return self._entries.get(benchmark)
+        module = self._modules.get(benchmark)
+        return self._entries.get(module) if module else None
 
     def get_all_statuses(self) -> dict[str, PrepareEntry]:
-        return dict(self._entries)
+        return {b: self._entries[m] for b, m in self._modules.items() if m in self._entries}
 
     def is_preparing(self, benchmark: str) -> bool:
-        entry = self._entries.get(benchmark)
+        entry = self.get_status(benchmark)
         return entry is not None and entry.status == "running"
 
     # ==================== Startup ====================
@@ -99,13 +109,35 @@ class PrepareManager:
             prepare_module = metadata.get("prepare")
             if not prepare_module:
                 continue
-            self._start_one(bench_dir.name, prepare_module)
+            self._modules[bench_dir.name] = prepare_module
+            if prepare_module not in self._entries:
+                self._start_one(bench_dir.name, prepare_module, ["--banks-only"])
 
-    def _start_one(self, benchmark: str, module_path: str) -> None:
-        entry = PrepareEntry(benchmark=benchmark, module_path=module_path)
-        self._entries[benchmark] = entry
+    # ==================== Before a task ====================
+
+    def prepare_dataset(self, benchmark: str, dataset: str) -> str | None:
+        """Start fetching what *dataset* still needs. Returns why the task must wait, or None.
+
+        Raises ValueError / FileNotFoundError when the dataset cannot be prepared
+        at all (unknown users, no such dataset) — retrying would not help.
+        """
+        module = self._modules.get(benchmark)
+        if not module:
+            return None
+        missing = importlib.import_module(module).missing_users(benchmark, dataset)
+        if not missing:
+            return None
+        self._start_one(benchmark, module, ["--benchmark", benchmark, "--dataset", dataset])
+        return (
+            f"Downloading data for the {len(missing)} users '{dataset}' needs. "
+            "Start the run again once preparation finishes."
+        )
+
+    def _start_one(self, benchmark: str, module_path: str, args: list[str]) -> None:
+        entry = PrepareEntry(benchmark=benchmark, module_path=module_path, args=args)
+        self._entries[module_path] = entry
         entry._task = asyncio.create_task(self._run_script(entry))
-        logger.info("Starting prepare script: %s (%s)", benchmark, module_path)
+        logger.info("Starting prepare script: %s (%s %s)", benchmark, module_path, " ".join(args))
 
     async def _run_script(self, entry: PrepareEntry) -> None:
         """Execute prepare script as a subprocess"""
@@ -115,6 +147,7 @@ class PrepareManager:
                 sys.executable,
                 "-m",
                 entry.module_path,
+                *entry.args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=str(Path(__file__).resolve().parents[3]),  # project root
