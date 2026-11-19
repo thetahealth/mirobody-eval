@@ -4,6 +4,14 @@
 
 :root {
     --background: #ffffff;
+    /* Score bands, low → high (static/js/score_bar.js). One blue ramp per mode, each
+       validated as an ordinal ramp against that mode's bar track (--secondary): the
+       band nearest the track clears 2:1, so a 0–0.2 band never reads as empty track. */
+    --score-band-1: #6da7ec;
+    --score-band-2: #3987e5;
+    --score-band-3: #256abf;
+    --score-band-4: #184f95;
+    --score-band-5: #0d366b;
     --foreground: #09090b;
     --card: #ffffff;
     --card-foreground: #09090b;
@@ -32,6 +40,11 @@
 
 .dark {
     --background: #09090b;
+    --score-band-1: #256abf;
+    --score-band-2: #3987e5;
+    --score-band-3: #6da7ec;
+    --score-band-4: #9ec5f4;
+    --score-band-5: #cde2fb;
     --foreground: #fafafa;
     --card: #0a0a0c;
     --card-foreground: #fafafa;
