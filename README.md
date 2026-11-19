@@ -497,7 +497,7 @@ uv run python -m benchmark.basic_runner <benchmark> <dataset> [options]
   --limit N               # Max cases to run
   --ids id1,id2           # Run specific case IDs
   -p, --parallel N        # Concurrency (default: 0 = unlimited)
-  -v, --verbose           # Verbose output
+  -v, --verbose           # One line per case by default; -v adds the per-turn and grading log, -vv debug
   --resume                # Resume from last checkpoint
 
 # Convert external datasets

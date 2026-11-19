@@ -470,7 +470,7 @@ uv run python -m benchmark.basic_runner <benchmark> <dataset> [options]
   --limit N               # 最多跑多少条
   --ids id1,id2           # 只跑指定 ID 的用例
   -p, --parallel N        # 并发数（默认 0 = 不限）
-  -v, --verbose           # 详细日志
+  -v, --verbose           # 默认每题一行进度；-v 加上每轮对话与判分日志，-vv 再加调试日志
   --resume                # 从上次检查点续跑
 
 # 转换外部数据集

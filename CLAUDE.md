@@ -270,12 +270,13 @@ score; excluding it without publishing the count would produce a fake high one.
 
 The CLI displays `error_count`, the grading denominator, and a separate list of
 ungraded case IDs. An all-error or empty group has no displayed average (`—`).
-`pass` / `fail` counts do not include the continuous `scored` result type, so
-zero pass and fail counts alone do not indicate a broken run. For example:
+The pass / fail counts and the pass rate are printed only when some case was
+graded pass or fail; a continuously scored run (HealthBench, kg_qa) shows the
+ungraded count and the average alone. For example:
 
 ```
-通过: 0   失败: 0   未判成: 0    平均得分 0.06 （3/3 条已评分）   ← three continuous scores
-通过: 0   失败: 0   未判成: 3    平均得分 —    （0/3 条已评分）   ← no grade was produced
+未判成: 0    平均得分 0.06 （3/3 条已评分）                     ← three continuous scores
+未判成: 3    平均得分 —    （0/3 条已评分）                     ← no grade was produced
 通过: 2   失败: 1   未判成: 4    平均得分 0.71 （3/7 条已评分）   ← read the denominator
 ```
 
