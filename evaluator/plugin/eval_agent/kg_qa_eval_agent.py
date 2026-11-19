@@ -72,6 +72,13 @@ def _word_boundary_match(pattern: str, text: str) -> bool:
 _NUMBER_RE = re.compile(r"[\-\u2212]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
 
 
+def _shown(value: Any, limit: int = 80) -> str:
+    """One line a reader can scan: lists joined, whitespace folded, long text cut."""
+    text = "; ".join(map(str, value)) if isinstance(value, (list, tuple)) else str(value)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 def _normalize_minus(text: str) -> str:
     """Replace Unicode minus (U+2212) with ASCII hyphen"""
     return text.replace("\u2212", "-")
@@ -889,10 +896,17 @@ class KgQaEvalAgent(AbstractEvalAgent, name="kg_qa", params_model=KgQaEvalInfo):
             )
 
         clipped = max(0.0, min(1.0, score))
+        # What was asked for and what was given lead the line; `detail` keeps the grader's
+        # own terms ("Number match 0/1 …") that report analysis matches on.
+        answer_line = _extract_answer_line(response_text)
+        answered = _shown(answer_line) if answer_line is not None else "(no ANSWER line)"
         return EvalResult(
             result="scored",
             score=clipped,
-            feedback=f"[{answer_type}] score={clipped:.3f} — {detail}",
+            feedback=(
+                f"[{answer_type}] score={clipped:.3f} — expected {_shown(self.config.expected_value)}, "
+                f"answered {answered} — {detail}"
+            ),
             trace=EvalTrace(
                 eval_detail={
                     "answer_type": answer_type,
