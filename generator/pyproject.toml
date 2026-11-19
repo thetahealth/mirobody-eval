@@ -1,6 +1,6 @@
 [project]
 name = "holyeval-generator"
-version = "0.1.0"
+version = "0.2.0"
 description = "HolyEval 评测用例生成器"
 requires-python = ">=3.11"
 dependencies = [
