@@ -80,7 +80,10 @@ def _summarize_report(path: str, mtime_ns: int, size: int) -> dict[str, Any]:
             usage["target_api_cost"] += api_cost
         else:
             _add_usage(usage["target"], cost.get("target"))
+    runtime_target = data.get("runtime_target") or {}
     return {
+        "target_type": runtime_target.get("type"),
+        "target_model": runtime_target.get("model"),
         "case_count": len(cases),
         "avg_score": sum(graded) / len(graded) if graded else None,
         "error_count": sum(1 for c in cases if (c.get("eval") or {}).get("result") == "error"),

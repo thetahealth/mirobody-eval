@@ -50,13 +50,26 @@ const _modelMeta = {
 };
 
 /* ===== Pricing a usage dict — shared by every page that includes this table ===== */
+function _priceFor(model) {
+    /* A recorded model name may carry how it was routed: `deepseek:deepseek-flash` names a
+       provider, `openai/gpt-5.4-mini` is OpenRouter's id. Both price as the bare model. */
+    const bare = model.replace(/^[a-z]+:/, '');
+    return _tokenPricing[model] || _tokenPricing[bare] || _tokenPricing[bare.replace(/^openai\//, '')] || null;
+}
+
+function _unpricedModels(usageDict) {
+    return Object.keys(usageDict || {}).filter(m => !_priceFor(m));
+}
+
 function _calcUsageCost(usageDict) {
     /* Calculate USD cost from {model: {input_tokens, output_tokens, input_token_details?}}
-       input_token_details.cache_read uses discounted rate, rest uses full price */
+       input_token_details.cache_read uses discounted rate, rest uses full price.
+       A model with no price adds nothing — see _costLabel for how that is shown. */
     let cost = 0;
     if (!usageDict) return cost;
     for (const [model, usage] of Object.entries(usageDict)) {
-        const p = _tokenPricing[model] || _defaultPricing;
+        const p = _priceFor(model);
+        if (!p) continue;
         const totalInput = usage.input_tokens || 0;
         const cachedInput = usage.input_token_details?.cache_read || 0;
         const freshInput = totalInput - cachedInput;
@@ -65,6 +78,12 @@ function _calcUsageCost(usageDict) {
         cost += (usage.output_tokens || 0) * p.output / 1e6;
     }
     return cost;
+}
+
+/* A total that leaves out unpriced models says so: "—" if nothing was priced, "≥ $x" otherwise */
+function _costLabel(usd, unpriced) {
+    if (!unpriced || unpriced.length === 0) return _formatCost(usd);
+    return usd > 0 ? '≥ ' + _formatCost(usd) : '—';
 }
 
 function _formatCost(usd) {

@@ -83,6 +83,20 @@ def test_a_changed_file_is_summarized_again(tmp_path, monkeypatch):
     assert _entries(tmp_path, monkeypatch)[name].case_count == 2
 
 
+def test_the_target_comes_from_the_run_not_the_filename(tmp_path, monkeypatch):
+    """`llm_api` itself has an underscore, so the filename's label cannot be split back apart."""
+    bench = tmp_path / "eslbench"
+    bench.mkdir()
+    (bench / "sample_llm_api_deepseek:deepseek-flash_20260101_000000.json").write_text(
+        json.dumps({"runtime_target": {"type": "llm_api", "model": "deepseek:deepseek-flash"}, "cases": []}),
+        encoding="utf-8",
+    )
+
+    e = _entries(tmp_path, monkeypatch)["sample_llm_api_deepseek:deepseek-flash_20260101_000000.json"]
+
+    assert (e.target_type, e.target_model) == ("llm_api", "deepseek:deepseek-flash")
+
+
 def test_an_unreadable_report_is_still_listed_without_a_summary(tmp_path, monkeypatch):
     bench = tmp_path / "eslbench"
     bench.mkdir()
