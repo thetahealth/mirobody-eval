@@ -4,25 +4,27 @@ ESLBench 数据准备脚本（canonical implementation）
 核心函数均接受 benchmark_dir / data_dir / label 参数，不同 benchmark 通过传入
 各自的路径复用同一套逻辑。
 
-Web UI 启动时通过 PrepareManager 自动执行，完成以下步骤:
-1. 从 HuggingFace ($ESLBENCH_HF_REPO, 默认 healthmemoryarena/ESL-Bench) 下载用户数据（基于 manifest.json 增量更新）
+1. 从 HuggingFace ($ESLBENCH_HF_REPO, 默认 healthmemoryarena/ESL-Bench) 同步 manifest 与题包，
+   再下载要准备的用户数据：给了 --dataset 只下这个数据集用到的用户，否则下所有已发布批次
 2. 为每个用户创建独立 DuckDB（benchmark/data/{benchmark}/.data/{user_dir}/user.duckdb）
 3. [可选] 生成每用户 JSONL + 汇总 full.jsonl（ESLBench 已有预制 JSONL，此步可跳过）
 
-目录名即邮箱（_AT_ 替换 @），如 user110_AT_demo → user110@demo。
-自动发现用户目录，无需硬编码用户列表。
+Web UI 启动时只跑 --banks-only（同步 manifest 与题包，几十 MB）；开跑某个数据集前，
+缺哪些用户就在后台用 --dataset 补哪些（见 web/app/services/prepare_manager.py）。
 
-变更检测: 通过 manifest.json 的 version + batch checksum 实现增量更新，
-只下载新增或变更的批次，避免全量重下载。
+目录名即邮箱（_AT_ 替换 @），如 user110_AT_demo → user110@demo。
 
 用法:
-    python -m generator.eslbench.prepare_data
-    python -m generator.eslbench.prepare_data --force   # 强制重建
+    python -m generator.eslbench.prepare_data --dataset sample50-20260331   # 只准备一个数据集
+    python -m generator.eslbench.prepare_data                               # 所有已发布批次
+    python -m generator.eslbench.prepare_data --force                       # 强制重新下载并重建
 """
 
 import argparse
 import json
 import os
+import sys
+from collections import defaultdict
 from pathlib import Path
 
 from evaluator.utils import paths
@@ -46,10 +48,10 @@ def dir_to_email(dir_name: str) -> str:
 
 
 def discover_user_dirs(data_dir: Path) -> list[Path]:
-    """自动发现 .data/ 下的用户目录（排除隐藏目录）"""
+    """自动发现 .data/ 下的用户目录（排除隐藏目录和 `_banks` 这类以下划线开头的目录）"""
     if not data_dir.is_dir():
         return []
-    return sorted(d for d in data_dir.iterdir() if d.is_dir() and not d.name.startswith("."))
+    return sorted(d for d in data_dir.iterdir() if d.is_dir() and not d.name.startswith((".", "_")))
 
 
 def find_timeline(user_dir: Path) -> Path | None:
@@ -67,6 +69,11 @@ def write_jsonl(items: list[dict], path: Path) -> None:
 
 
 # ==================== Step 1: HuggingFace 下载（manifest 驱动） ====================
+#
+# 本地 `.manifest.json` 是最近一次同步到的远端 manifest 原样副本。不变式：`.data/` 下
+# 存在的每个用户目录，都是按这份副本里它所在批次的 checksum 下载的。远端某一批的
+# checksum 变了，同步时就删掉本地这一批的用户目录，等哪个数据集用到再重新下载。
+# 所以"目录在"就等于"数据是新的"，不必另记哪些用户下过。
 
 
 def _load_local_manifest(data_dir: Path) -> dict:
@@ -96,109 +103,134 @@ def _fetch_remote_manifest(label: str) -> dict | None:
         return None
 
 
-def _check_download_complete(data_dir: Path) -> bool:
-    """检查是否有至少一个用户数据已下载完整"""
-    user_dirs = discover_user_dirs(data_dir)
-    if not user_dirs:
-        return False
-    for d in user_dirs:
-        if not (d / "profile.json").exists():
-            return False
-    return True
+def _roster(manifest: dict) -> dict[str, str]:
+    """用户目录名 → 所在批次"""
+    return {u: batch_id for batch_id, info in (manifest.get("batches") or {}).items() for u in info.get("users", [])}
 
 
-def download_from_hf(data_dir: Path, *, label: str = "eslbench", force: bool = False) -> tuple[Path, bool]:
-    """基于 manifest.json 增量下载用户数据到 .data/ 目录。返回 (data_dir, data_changed)"""
+def dataset_users(path: Path) -> set[str]:
+    """数据集里的题目指向的用户目录名（user5062@demo → user5062_AT_demo）"""
+    users: set[str] = set()
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            for target in ((item.get("user") or {}).get("target_overrides") or {}).values():
+                email = target.get("user_email") or (target.get("tool_context") or {}).get("user_email")
+                if email:
+                    users.add(email.replace("@", "_AT_"))
+    return users
+
+
+def _dataset_path(benchmark: str, dataset: str) -> Path:
+    from evaluator.utils.benchmark_reader import resolve_dataset
+
+    path, _ = resolve_dataset(benchmark, dataset)
+    if not path.is_file():
+        raise FileNotFoundError(f"数据集不存在: {benchmark}/{dataset}")
+    return path
+
+
+def _unknown_users_message(benchmark: str, dataset: str, unknown: set[str]) -> str:
+    return f"{benchmark}/{dataset} 用到的用户不在任何已发布批次里，下载不到: {', '.join(sorted(unknown))}"
+
+
+def _user_ready(user_dir: Path) -> bool:
+    return (user_dir / "profile.json").is_file() and (user_dir / "user.duckdb").is_file()
+
+
+def missing_users(benchmark: str, dataset: str) -> list[str]:
+    """跑 *dataset* 之前还要准备的用户；空列表表示可以直接跑。
+
+    只看本地，不联网：用户目录里有 profile.json 和 user.duckdb 就算就绪（见上面的
+    不变式）。Web 在开跑前调用它，决定要不要先在后台准备数据。数据集用到的用户不在
+    任何已发布批次里时抛 ValueError：这种数据下载不到，应当直接说，而不是去下载再失败。
+    """
+    needed = dataset_users(_dataset_path(benchmark, dataset))
+    manifest = _load_local_manifest(DATA_DIR)
+    if manifest:
+        unknown = needed - _roster(manifest).keys()
+        if unknown:
+            raise ValueError(_unknown_users_message(benchmark, dataset, unknown))
+    return sorted(u for u in needed if not _user_ready(DATA_DIR / u))
+
+
+def sync_manifest(data_dir: Path, remote: dict, *, label: str = "eslbench", force: bool = False) -> None:
+    """把本地对齐到远端 manifest：变更批次的本地用户目录删掉，新增或变更批次的题包拉下来。"""
     import shutil
 
     from huggingface_hub import snapshot_download
 
-    # 拉取远端 manifest
-    remote_manifest = _fetch_remote_manifest(label)
-    if remote_manifest is None:
-        if _check_download_complete(data_dir) and not force:
-            print(f"[{label}] 无法连接远端, 使用本地已有数据")
-            return data_dir, False
-        print(f"[{label}] 错误: 无法获取远端 manifest 且本地无数据")
-        return data_dir, False
-
-    local_manifest = _load_local_manifest(data_dir)
-
-    # 快速判断: version 相同且非强制 → 无变更
-    if not force and remote_manifest.get("version") == local_manifest.get("version"):
-        if _check_download_complete(data_dir):
-            print(f"[{label}] manifest version 一致, 跳过下载")
-            return data_dir, False
-
-    # 找出需要下载的批次（新增或 checksum 变更）
-    batches_to_download: list[str] = []
-    remote_batches = remote_manifest.get("batches", {})
-    local_batches = local_manifest.get("batches", {})
-
-    for batch_id, batch_info in remote_batches.items():
-        local_batch = local_batches.get(batch_id)
-        if force or not local_batch or local_batch.get("checksum") != batch_info.get("checksum"):
-            batches_to_download.append(batch_id)
-
-    if not batches_to_download and _check_download_complete(data_dir):
-        print(f"[{label}] 所有批次 checksum 一致, 跳过下载")
-        _save_local_manifest(remote_manifest, data_dir)
-        return data_dir, False
-
-    # 逐批次下载
-    total_copied = 0
-    for batch_id in batches_to_download:
-        batch_info = remote_batches[batch_id]
-        user_count = batch_info.get("user_count", "?")
-        print(f"[{label}] 下载批次 {batch_id} ({user_count} 个用户)...")
-
-        snapshot_dir = snapshot_download(
-            repo_id=HF_REPO,
-            repo_type="dataset",
-            # `*/*.json` is the per-user data surface. `*.jsonl` at the batch
-            # root is the question bank, and it was NOT fetched before: the
-            # leaderboard's dataset for a batch (`manifest.eval_dataset`) could
-            # therefore not be run at all, and what did run came from whatever
-            # copy this repo happened to vendor — with no version relationship
-            # to the manifest the score would be quoted against.
-            allow_patterns=[f"data/{batch_id}/*/*.json", f"data/{batch_id}/*.jsonl"],
-        )
-        snapshot_batch = Path(snapshot_dir) / "data" / batch_id
-
-        if not snapshot_batch.exists():
-            print(f"[{label}] 警告: 批次 {batch_id} 下载后目录不存在, 跳过")
+    local_batches = _load_local_manifest(data_dir).get("batches") or {}
+    for batch_id, info in (remote.get("batches") or {}).items():
+        old = local_batches.get(batch_id)
+        changed = not old or old.get("checksum") != info.get("checksum")
+        if not (changed or force):
             continue
 
-        # 复制到 .data/{user_dir}/ 扁平结构（去掉 batch 层级）
-        copied = 0
-        for src_dir in sorted(snapshot_batch.iterdir()):
-            if not src_dir.is_dir() or src_dir.name.startswith("."):
-                continue
-            dst_dir = data_dir / src_dir.name
-            dst_dir.mkdir(parents=True, exist_ok=True)
-            for src_file in src_dir.iterdir():
-                if src_file.is_file() and src_file.suffix == ".json":
-                    if src_file.name.startswith("kg_evaluation_queries"):
-                        continue  # ground-truth 不复制到本地 .data/
-                    shutil.copy2(str(src_file), str(dst_dir / src_file.name))
-                    copied += 1
+        if old and changed:
+            stale = [data_dir / u for u in old.get("users", []) if (data_dir / u).is_dir()]
+            for d in stale:
+                shutil.rmtree(d)
+            if stale:
+                print(f"[{label}] 批次 {batch_id} 已更新, 删除 {len(stale)} 个过期的用户目录（用到时重新下载）")
 
-        # 题包保留 batch 层级：目录名就是批次号，读取侧据此把分数锚到
+        # 题包在批次根目录。题包保留 batch 层级：目录名就是批次号，读取侧据此把分数锚到
         # manifest 的 batch checksum，不必再维护一份「数据集 → 批次」索引。
+        snapshot_dir = snapshot_download(
+            repo_id=HF_REPO, repo_type="dataset", allow_patterns=[f"data/{batch_id}/*.jsonl"]
+        )
         banks = 0
         bank_dir = data_dir / BANKS_DIRNAME / batch_id
-        for src_file in sorted(snapshot_batch.glob("*.jsonl")):
+        for src_file in sorted((Path(snapshot_dir) / "data" / batch_id).glob("*.jsonl")):
             bank_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(src_file), str(bank_dir / src_file.name))
             banks += 1
+        print(f"[{label}] 批次 {batch_id}: {banks} 个题包")
 
-        total_copied += copied + banks
-        print(f"[{label}] 批次 {batch_id}: {copied} 个用户文件, {banks} 个题包")
+    _save_local_manifest(remote, data_dir)
 
-    # 保存 manifest
-    _save_local_manifest(remote_manifest, data_dir)
-    print(f"[{label}] 下载完成: {len(batches_to_download)} 个批次, {total_copied} 个文件")
-    return data_dir, total_copied > 0
+
+def fetch_users(
+    data_dir: Path, manifest: dict, users: set[str], *, label: str = "eslbench", force: bool = False
+) -> set[str]:
+    """下载 *users* 的数据（本地已有的跳过，除非 force）。返回这次实际下载了的用户。"""
+    import shutil
+
+    from huggingface_hub import snapshot_download
+
+    roster = _roster(manifest)
+    by_batch: dict[str, list[str]] = defaultdict(list)
+    for u in sorted(users):
+        if force or not (data_dir / u / "profile.json").is_file():
+            by_batch[roster[u]].append(u)
+
+    fetched: set[str] = set()
+    for batch_id, batch_users in sorted(by_batch.items()):
+        print(f"[{label}] 批次 {batch_id}: 下载 {len(batch_users)} 个用户...")
+        snapshot_dir = snapshot_download(
+            repo_id=HF_REPO,
+            repo_type="dataset",
+            allow_patterns=[f"data/{batch_id}/{u}/*.json" for u in batch_users],
+            # 题目答案不进本地 .data/（见 purge_ground_truth），也就不必下载
+            ignore_patterns=["*/kg_evaluation_queries*"],
+        )
+        for u in batch_users:
+            src_dir = Path(snapshot_dir) / "data" / batch_id / u
+            if not src_dir.is_dir():
+                print(f"[{label}] 警告: {batch_id}/{u} 下载后目录不存在, 跳过")
+                continue
+            dst_dir = data_dir / u
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            for src_file in src_dir.iterdir():
+                if not (src_file.is_file() and src_file.suffix == ".json"):
+                    continue
+                if src_file.name.startswith("kg_evaluation_queries"):
+                    continue  # HF 缓存里可能留着以前整批下载时的答案文件，同样不复制
+                shutil.copy2(str(src_file), str(dst_dir / src_file.name))
+            fetched.add(u)
+    return fetched
 
 
 def purge_ground_truth(data_dir: Path, *, label: str = "eslbench") -> int:
@@ -367,19 +399,22 @@ def create_user_duckdb(user_dir: Path, *, force: bool = False) -> None:
     con.close()
 
 
-def build_all_duckdb(data_dir: Path, *, label: str = "eslbench", force: bool = False) -> None:
-    """为所有用户创建独立 DuckDB"""
-    user_dirs = discover_user_dirs(data_dir)
+def build_all_duckdb(
+    data_dir: Path, users: list[str], *, rebuild: set[str] = frozenset(), label: str = "eslbench"
+) -> None:
+    """为 *users* 创建独立 DuckDB；已有的跳过，*rebuild* 里的（数据刚重新下载过）重建"""
     created = 0
     skipped = 0
 
-    for user_dir in user_dirs:
-        db_path = user_dir / "user.duckdb"
-        if db_path.exists() and not force:
+    for user in users:
+        user_dir = data_dir / user
+        if not (user_dir / "profile.json").is_file():
+            continue
+        if (user_dir / "user.duckdb").exists() and user not in rebuild:
             skipped += 1
             continue
 
-        create_user_duckdb(user_dir, force=force)
+        create_user_duckdb(user_dir, force=True)
         created += 1
 
     print(f"[{label}] DuckDB 创建完成: {created} 个新建, {skipped} 个已存在跳过")
@@ -445,65 +480,68 @@ def build_datasets(benchmark_dir: Path, data_dir: Path, *, label: str = "eslbenc
 # ==================== ESLBench Main ====================
 
 
-def _check_local_complete_eslbench() -> bool:
-    """快速本地完整性检查（ESLBench）: manifest + 用户数据 + DuckDB 全部就绪"""
-    manifest_file = DATA_DIR / ".manifest.json"
-    if not manifest_file.exists():
-        return False
-    user_dirs = discover_user_dirs(DATA_DIR)
-    if not user_dirs:
-        return False
-    for d in user_dirs:
-        if not (d / "profile.json").exists():
-            return False
-        if not (d / "user.duckdb").exists():
-            return False
-    return True
-
-
 def main():
     parser = argparse.ArgumentParser(description="ESLBench 数据准备")
-    parser.add_argument("--force", action="store_true", help="强制重建（忽略已存在的文件）")
+    parser.add_argument("--dataset", help="只准备这个数据集用到的用户（不给则准备所有已发布批次）")
+    parser.add_argument(
+        "--benchmark", default="eslbench", help="--dataset 所属的 benchmark（eslbench_distractor 与 eslbench 共用数据）"
+    )
+    parser.add_argument("--banks-only", action="store_true", help="只同步 manifest 和题包，不下载用户数据")
+    parser.add_argument("--force", action="store_true", help="强制重新下载并重建要准备的用户")
     args = parser.parse_args()
-
-    force = args.force
+    if args.dataset and args.banks_only:
+        parser.error("--dataset 与 --banks-only 不能同时给")
 
     print("=" * 60)
     print("ESLBench 数据准备")
     print("=" * 60)
 
-    # 快速路径: 本地数据完整 + manifest version 一致 → 秒退
-    if not force and _check_local_complete_eslbench():
-        remote_manifest = _fetch_remote_manifest("eslbench")
-        local_manifest = _load_local_manifest(DATA_DIR)
-        if remote_manifest and remote_manifest.get("version") == local_manifest.get("version"):
-            print("[eslbench] 本地数据完整且 manifest version 一致, 跳过准备")
-            print("=" * 60)
-            return
+    # Step 1: 同步 manifest 与题包，再下载要准备的用户
+    print("\n--- Step 1: 同步 HuggingFace 数据 ---")
+    remote = _fetch_remote_manifest("eslbench")
+    if remote is not None:
+        sync_manifest(DATA_DIR, remote, label="eslbench", force=args.force)
+        manifest = remote
+    else:
+        manifest = _load_local_manifest(DATA_DIR)
+        if not manifest:
+            sys.exit("[eslbench] 错误: 无法获取远端 manifest，本地也没有数据")
+        print("[eslbench] 无法连接远端, 只用本地已有数据")
 
-    # Step 1: 从 HuggingFace 下载（检测远端变更）
-    print("\n--- Step 1: 下载 HuggingFace 数据 ---")
-    _, data_changed = download_from_hf(DATA_DIR, label="eslbench", force=force)
+    if args.banks_only:
+        print("[eslbench] 只同步了 manifest 与题包")
+        print("=" * 60)
+        return
+
+    roster = _roster(manifest)
+    if args.dataset:
+        users = dataset_users(_dataset_path(args.benchmark, args.dataset))
+        unknown = users - roster.keys()
+        if unknown:
+            sys.exit(f"[eslbench] 错误: {_unknown_users_message(args.benchmark, args.dataset, unknown)}")
+        print(f"[eslbench] {args.benchmark}/{args.dataset} 用到 {len(users)} 个用户")
+    else:
+        users = set(roster)
+
+    fetched = set()
+    if remote is not None:
+        fetched = fetch_users(DATA_DIR, manifest, users, label="eslbench", force=args.force)
+    absent = sorted(u for u in users if not (DATA_DIR / u / "profile.json").is_file())
+    if absent:
+        sys.exit(f"[eslbench] 错误: {len(absent)} 个用户的数据没能下载: {', '.join(absent)}")
 
     # 清理 ground-truth（兼容旧数据: 新下载已跳过复制，此处清理历史遗留文件）
     purge_ground_truth(DATA_DIR, label="eslbench")
 
-    # 远端数据有变更时，级联重建 DuckDB
-    rebuild = force or data_changed
-    if data_changed and not force:
-        print("[eslbench] 远端数据有更新, 将级联重建 DuckDB")
-
-    # Step 2: 创建每用户 DuckDB
+    # Step 2: 创建每用户 DuckDB（数据刚重新下载过的重建）
     print("\n--- Step 2: 创建每用户 DuckDB ---")
-    build_all_duckdb(DATA_DIR, label="eslbench", force=rebuild)
+    build_all_duckdb(DATA_DIR, sorted(users), rebuild=fetched, label="eslbench")
 
     # 汇总
     print("\n" + "=" * 60)
     print("准备完成!")
     print(f"  数据目录: {DATA_DIR}/")
-    user_dirs = discover_user_dirs(DATA_DIR)
-    db_count = sum(1 for d in user_dirs if (d / "user.duckdb").exists())
-    print(f"  用户数据库: {db_count}/{len(user_dirs)} 个")
+    print(f"  本次准备的用户: {len(users)} 个（其中新下载 {len(fetched)} 个）")
     print("=" * 60)
 
 

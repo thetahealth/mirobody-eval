@@ -115,10 +115,11 @@ uv run python -m web                    # http://localhost:8000
 > OpenRouter 调用。账号需有对应模型的访问权限。这配置的是评测进程；mirobody
 > 部署自身的对话模型和 embedding 仍需单独配置。
 >
-> **ESLBench 数据准备：** 评测前运行 `uv run python -m generator.eslbench.prepare_data`
->（Web UI 也会在后台启动准备，请等完成后再跑）。它会检查 manifest 中的全部批次，
-> 下载缺失或有变更的批次，包括用户数据和题库，再生成 DuckDB 文件。它不是只下载
-> 一个用户，首次准备可能占用较多磁盘和时间。其他基准的题目文件随仓库提供。
+> **ESLBench 数据准备：** 评测某个数据集前运行 `uv run python -m generator.eslbench.prepare_data --dataset sample50-20260331`。
+> 它先同步 manifest 和全部题库，再只下载这个数据集的题目用到的用户（这个数据集是 27 个，约 0.5 GB），
+> 并生成他们的 DuckDB 文件。不加 `--dataset` 会准备全部已发布批次，要占好几 GB。
+> Web UI 会自动做这件事：启动时同步题库，开跑时补齐该数据集还缺的数据，准备完再点一次运行。
+> 其他基准的题目文件随仓库提供。
 
 如果只有 Google 或 DashScope 的 key，还需要为调用 LLM 的角色分别指定模型。
 先在 `.env` 配好对应的 key，再把下面的 `YOUR_MODEL_ID` 换成账号可用的模型 ID：
@@ -147,8 +148,8 @@ uv run python -m benchmark.basic_runner healthbench sample \
 # 1. 安装引擎集成依赖
 uv sync --extra mirobody --python 3.12
 
-# 2. 准备全部缺失或有变更的 ESLBench 批次，不只是一个用户
-uv run python -m generator.eslbench.prepare_data
+# 2. 准备要跑的数据集用到的用户
+uv run python -m generator.eslbench.prepare_data --dataset sample200-20260430
 
 # 3. 指向自己的部署；把路径和地址替换为实际配置
 export MIROBODY_CONFIG=/绝对路径/到/你的/mirobody/config.localdb.yaml
@@ -365,8 +366,8 @@ ESLBench（[arXiv:2604.02834](https://arxiv.org/abs/2604.02834)）评测纵向�
 **需要先准备数据** —— ESLBench 会从 HuggingFace 下载用户数据，并为每个用户建 DuckDB 索引：
 
 ```bash
-# 首次：准备数据（走 Web UI 会自动做，CLI 需手动）
-uv run python -m generator.eslbench.prepare_data
+# 首次：准备这个数据集的数据（走 Web UI 会自动做，CLI 需手动）
+uv run python -m generator.eslbench.prepare_data --dataset sample50-20260331
 
 # 快速验证：先跑 3 条用例检查环境
 uv run python -m benchmark.basic_runner eslbench sample50-20260331 --target-type llm_api --target-model gpt-5.4-mini --limit 3
@@ -454,8 +455,9 @@ class MyTargetAgent(AbstractTargetAgent, name="my_target", params_model=MyTarget
 
 ```bash
 # 准备基准数据（ESLBench 必需；其余基准数据自带）
-uv run python -m generator.eslbench.prepare_data          # 下载 HF 数据 + 建 DuckDB
-uv run python -m generator.eslbench.prepare_data --force   # 强制重建
+uv run python -m generator.eslbench.prepare_data --dataset <数据集>   # 只准备该数据集用到的用户
+uv run python -m generator.eslbench.prepare_data                     # 全部已发布批次
+uv run python -m generator.eslbench.prepare_data --force             # 重新下载并重建
 
 # 跑基准
 uv run python -m benchmark.basic_runner <benchmark> <dataset> [options]

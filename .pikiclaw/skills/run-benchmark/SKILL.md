@@ -25,7 +25,7 @@ python -m benchmark.basic_runner healthbench hard --target-type llm_api --target
 python -m benchmark.basic_runner medcalc sample --target-type llm_api --target-model gpt-5.4-mini
 python -m benchmark.basic_runner medcalc full --target-type llm_api --target-model gpt-5.4-mini --limit 50
 
-# ESL-Bench（需先跑 generator.eslbench.prepare_data 下载数据）
+# ESL-Bench（需先跑 generator.eslbench.prepare_data --dataset <数据集> 下载数据）
 python -m benchmark.basic_runner eslbench sample50-20260331 --target-type llm_api --target-model gpt-5.4-mini
 
 # 组合选项

@@ -31,6 +31,14 @@ async def create_task(req: TaskCreateRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
+    # Fetch the data this dataset needs, if it is not here yet
+    try:
+        waiting = prepare_manager.prepare_dataset(req.benchmark, req.dataset)
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if waiting:
+        raise HTTPException(status_code=409, detail=waiting)
+
     # Frontend target dict used as cli_overrides (only editable fields take effect)
     cli_overrides = req.target
     try:

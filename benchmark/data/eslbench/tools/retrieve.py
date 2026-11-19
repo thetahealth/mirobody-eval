@@ -1740,7 +1740,7 @@ def _ensure_hydrated_duckdb(ctx: ToolContext) -> Path:
         raise FileNotFoundError(
             f"用户数据目录不存在: {ctx.data_dir}\n"
             f"ESLBench 的数据不随仓库分发，先拉一次:\n"
-            f"    python -m generator.eslbench.prepare_data"
+            f"    python -m generator.eslbench.prepare_data --dataset <数据集名>"
         )
 
     cache_path = _cache_db_path(ctx)

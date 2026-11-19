@@ -73,11 +73,13 @@ uv run python -m benchmark.basic_runner healthbench sample --target-model gpt-5.
 ### Step 5.5: 准备 ESLBench 数据（可选）
 
 ESLBench 需要从 HuggingFace 下载合成健康 KG 数据并建 per-user DuckDB 索引。
-Web UI 启动时会自动执行；CLI 场景手动跑：
+Web UI 开跑某个数据集时会自动补齐它要的数据；CLI 场景手动跑，只准备要跑的数据集：
 
 ```bash
-uv run python -m generator.eslbench.prepare_data
+uv run python -m generator.eslbench.prepare_data --dataset sample50-20260331
 ```
+
+不加 `--dataset` 会准备全部已发布批次（好几 GB），新手不需要。
 
 如果 `.env` 里 `HF_TOKEN` 还是占位符 `hf_xxx`，**提示用户**：
 - ESLBench 需要 HuggingFace Token 才能下载数据，获取：https://huggingface.co/settings/tokens
@@ -86,8 +88,8 @@ uv run python -m generator.eslbench.prepare_data
 注意：
 - 首次下载可能几分钟（取决于网络）
 - 数据落在 `benchmark/data/eslbench/.data/`
-- 支持增量更新，重复运行会跳过已下载的部分
-- 出错且非关键（如网络抖动）时可重试：`uv run python -m generator.eslbench.prepare_data --force`
+- 支持增量更新，重复运行会跳过已下载的用户
+- 出错且非关键（如网络抖动）时可重试：`uv run python -m generator.eslbench.prepare_data --dataset sample50-20260331 --force`
 
 ### Step 6: 启动 Web UI
 

@@ -20,7 +20,7 @@ uv sync --extra mirobody --python 3.12
 # MIROBODY_CONFIG names the deployment; both the seeder and the target agent read it.
 export MIROBODY_CONFIG=/abs/path/to/deployment/config.localdb.yaml
 export MIROBODY_BASE_URL=http://localhost:18080
-uv run python -m generator.eslbench.prepare_data  # all missing or changed batches, not one user
+uv run python -m generator.eslbench.prepare_data --dataset sample200-20260430  # the users that dataset needs
 python -m generator.eslbench.seed_mirobody --users user5086@demo
 python -m benchmark.basic_runner eslbench sample200-20260430 --target-type mirobody \
     --ids user5086_AT_demo_Q001,user5086_AT_demo_Q087,user5086_AT_demo_Q067 -p 1
@@ -48,7 +48,8 @@ python -m benchmark.basic_runner eslbench sample50-20260324 \
     --target-type mirobody --target-override agent=Mix
 
 # Data preparation (required before running ESLBench via CLI; automatic via Web UI)
-python -m generator.eslbench.prepare_data            # download HF data + build per-user DuckDB
+python -m generator.eslbench.prepare_data --dataset sample50-20260331   # banks + only that dataset's users
+python -m generator.eslbench.prepare_data            # every published batch (several GB)
 python -m generator.eslbench.prepare_data --force    # force re-download + rebuild
 
 # Data conversion (external datasets → mirobody-eval format)
