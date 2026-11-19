@@ -266,6 +266,7 @@
 <script src="/static/js/marked.min.js"></script>
 <script src="/static/js/answer_markdown.js"></script>
 <script src="/static/js/case_trace.js"></script>
+<script src="/static/js/score_bar.js"></script>
 <script>
 function taskDetail(taskId) {
     return {
@@ -291,6 +292,11 @@ function taskDetail(taskId) {
         selectedTags: {},
 
         get caseEntries() { return Object.entries(this.task.cases || {}); },
+        tagSegments(tag) {
+            return scoreSegments(Object.values(this.task.cases || {})
+                .filter(c => c.eval_result && (c.tags || []).includes(tag))
+                .map(c => ({ result: c.eval_result, score: c.score })));
+        },
         get tagCategories() {
             const cats = {};
             for (const [, info] of this.caseEntries) {

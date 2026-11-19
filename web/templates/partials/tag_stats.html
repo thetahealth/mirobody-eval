@@ -43,14 +43,14 @@
                                   x-text="` (${s.total - s.error_count}/${s.total})`"></span>
                         </td>
                         <td class="py-2 pl-4">
-                            <div class="h-2 bg-secondary rounded-full overflow-hidden flex w-full">
-                                <div class="h-full bg-success" :style="`width: ${s.total > 0 ? (s.pass_count / s.total * 100) : 0}%`"></div>
-                                <div class="h-full bg-destructive" :style="`width: ${s.total > 0 ? (s.fail_count / s.total * 100) : 0}%`"></div>
-                                <!-- Ungraded segment. The bar used to be pass+fail only,
-                                     so an ungraded case just left empty track that read
-                                     as "nothing happened here" rather than "this did not
-                                     get graded". -->
-                                <div class="h-full bg-warning" :style="`width: ${s.total > 0 ? ((s.error_count || 0) / s.total * 100) : 0}%`"></div>
+                            <!-- Pass, fail, five score bands and ungraded (static/js/score_bar.js).
+                                 A continuous score used to have no segment here at all, so a
+                                 HealthBench or kg_qa tag showed an empty track. -->
+                            <div class="h-2 bg-secondary rounded-full overflow-hidden flex gap-[2px] w-full">
+                                <template x-for="seg in tagSegments(tag)" :key="seg.key">
+                                    <div class="h-full" :class="seg.cls || ''" :style="`width: ${seg.pct}%;` + (seg.color ? `background:${seg.color}` : '')"
+                                         :title="`${seg.label}: ${seg.count}`"></div>
+                                </template>
                             </div>
                         </td>
                     </tr>

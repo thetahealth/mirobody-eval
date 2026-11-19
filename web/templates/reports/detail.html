@@ -69,11 +69,20 @@
 
         <!-- Score distribution bar -->
         <div class="rounded-lg border border-border bg-card p-5 mb-5">
-            <div class="h-2 bg-secondary rounded-full overflow-hidden flex">
-                <div class="h-full bg-success" :style="`width: ${cases.length > 0 ? (stats.pass / cases.length * 100) : 0}%`"></div>
-                <div class="h-full bg-destructive" :style="`width: ${cases.length > 0 ? (stats.fail / cases.length * 100) : 0}%`"></div>
-                <div class="h-full bg-blue-400" :style="`width: ${cases.length > 0 ? (stats.scored / cases.length * 100) : 0}%`"></div>
-                <div class="h-full bg-warning" :style="`width: ${cases.length > 0 ? (stats.error / cases.length * 100) : 0}%`"></div>
+            <div class="h-2 bg-secondary rounded-full overflow-hidden flex gap-[2px]">
+                <template x-for="seg in scoreBar" :key="seg.key">
+                    <div class="h-full" :class="seg.cls || ''" :style="`width: ${seg.pct}%;` + (seg.color ? `background:${seg.color}` : '')"
+                         :title="`${seg.label}: ${seg.count}`"></div>
+                </template>
+            </div>
+            <div class="flex flex-wrap gap-x-4 gap-y-1 mt-3 text-xs text-muted-foreground">
+                <template x-for="seg in scoreBar" :key="seg.key">
+                    <span class="inline-flex items-center gap-1.5">
+                        <span class="w-2.5 h-2.5 rounded-sm" :class="seg.cls || ''" :style="seg.color ? `background:${seg.color}` : ''"></span>
+                        <span x-text="seg.label"></span>
+                        <span class="text-foreground tabular-nums" x-text="seg.count"></span>
+                    </span>
+                </template>
             </div>
         </div>
 
@@ -260,6 +269,7 @@
 <script src="/static/js/marked.min.js"></script>
 <script src="/static/js/answer_markdown.js"></script>
 <script src="/static/js/case_trace.js"></script>
+<script src="/static/js/score_bar.js"></script>
 <script>
 function reportViewer(benchmark, filename) {
     return {
@@ -310,6 +320,14 @@ function reportViewer(benchmark, filename) {
         get tagStats() {
             if (this._reportTagStats && Object.keys(this._reportTagStats).length > 0) return this._reportTagStats;
             return this._computeTagStats();
+        },
+        get scoreBar() {
+            return scoreSegments(this.cases.map(c => ({ result: c.eval?.result, score: c.eval?.score })));
+        },
+        tagSegments(tag) {
+            return scoreSegments(this.cases
+                .filter(c => c.eval?.result && (c.tags || []).includes(tag))
+                .map(c => ({ result: c.eval.result, score: c.eval.score })));
         },
         get filteredCases() {
             let list = this.cases;
