@@ -73,3 +73,24 @@ async def test_a_corrected_answer_is_graded_as_corrected():
 
     assert corrected == 1.0
     assert reverted < 1.0
+
+
+async def test_the_feedback_names_the_expected_and_the_given_answer():
+    """A wrong numeric answer used to read `closest_rel_dist=63.64% (tol=1%, ...)`, with
+    neither the gold nor the answer in it. Both now lead the line; the grader's own terms
+    follow unchanged, since report analysis matches on "Number match 0/"."""
+    cfg, gold = _numeric_case()
+    agent = KgQaEvalAgent(cfg)
+    agent._extract_response = staticmethod(lambda _memory: f"Counted twice.\nANSWER: {gold * 3}")
+    result = await agent.run([], SessionInfo(user_id="u", user_token="t", has_user_data=True))
+
+    assert f"expected {cfg.expected_value}, answered {gold * 3} — Number match 0/" in result.feedback
+
+
+async def test_the_feedback_says_when_there_is_no_answer_line():
+    cfg, _ = _numeric_case()
+    agent = KgQaEvalAgent(cfg)
+    agent._extract_response = staticmethod(lambda _memory: "I could not work it out.")
+    result = await agent.run([], SessionInfo(user_id="u", user_token="t", has_user_data=True))
+
+    assert "answered (no ANSWER line)" in result.feedback
