@@ -214,7 +214,7 @@ def test_cli_summary_shows_coverage_for_mixed_results_and_tags(capsys, tmp_path)
     output = capsys.readouterr().out
     assert "未判成:    1" in output
     assert "平均得分:  1.00 （1/2 条已评分）" in output
-    assert "[dim:unfinished] 1 条, 通过率 0.0%, 未判成 1 条, 平均分 — （0/1 条已评分）" in output
+    assert "[dim:unfinished] 1 条, 未判成 1 条, 平均分 — （0/1 条已评分）" in output
     grouped = output.split("按标签统计（全部）:", 1)[0]
     assert "— （0/1 条已评分）" in grouped
     assert "0.000" not in grouped
@@ -302,3 +302,30 @@ def test_saved_case_results_define_the_denominator_for_older_reports(tmp_path):
     assert stats["dim:trend"]["avg_score"] == 1.0
     assert stats["dim:trend"]["error_count"] == 1
     assert path.read_text(encoding="utf-8") == original
+
+
+def test_a_continuously_scored_run_shows_no_pass_rate(capsys, tmp_path):
+    """HealthBench / kg_qa grade every case `scored`; "通过率 0.0%" read as all of them failing."""
+    from benchmark.basic_runner import _print_summary
+
+    report = build_bench_report(
+        [_result("a", "scored", 0.8, ["dim:x"]), _result("b", "scored", 0.4, ["dim:x"])],
+        benchmark_name="probe", dataset_name="probe",
+    )
+    _print_summary(report, tmp_path / "report.json")
+    output = capsys.readouterr().out
+    assert "通过率" not in output.split("按评测维度统计", 1)[0]
+    assert "[dim:x] 2 条, 未判成 0 条, 平均分 0.60 （2/2 条已评分）" in output
+
+
+def test_a_pass_fail_run_keeps_its_pass_rate(capsys, tmp_path):
+    from benchmark.basic_runner import _print_summary
+
+    report = build_bench_report(
+        [_result("a", "pass", 1.0, ["dim:x"]), _result("b", "fail", 0.0, ["dim:x"])],
+        benchmark_name="probe", dataset_name="probe",
+    )
+    _print_summary(report, tmp_path / "report.json")
+    output = capsys.readouterr().out
+    assert "通过率:    50.0%" in output
+    assert "[dim:x] 2 条, 通过率 50.0%, 未判成 0 条" in output

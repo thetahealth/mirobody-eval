@@ -140,14 +140,11 @@ async def run_benchmark(
     )
     mgr.save_meta(meta)
 
-    logger.info(
-        "开始跑分: %s/%s (%d 条用例, target=%s, concurrency=%s, checkpoint=%s)",
-        benchmark,
-        dataset,
-        len(test_cases),
-        runtime_target.type,
-        max_concurrency or "unlimited",
-        checkpoint_id,
+    print(
+        f"开始跑分: {benchmark}/{dataset}，{len(test_cases)} 条用例，"
+        f"target={runtime_target.type} ({getattr(runtime_target, 'model', 'N/A')})，"
+        f"并发={max_concurrency or '不限'}，检查点={checkpoint_id}（-v 看每轮对话与判分日志）",
+        flush=True,
     )
 
     # 6. 创建 BatchSession（直接使用，支持 live file 和 task registry）
@@ -176,6 +173,7 @@ async def run_benchmark(
         if ctx and ctx.result:
             mgr.append_result(ctx.result)
         delete_live_file(task_id, case_id)
+        _print_progress(sess, case_id)
 
     session.on_progress = _on_progress
 
@@ -276,7 +274,7 @@ async def _resume_benchmark(
                 logger.error("用例 %s 转换失败: %s", item.id, e, exc_info=True)
                 raise ValueError(f"用例 {item.id} 转换失败: {e}") from e
 
-        logger.info("继续执行 %d 条用例 (concurrency=%s)", len(test_cases), concurrency or "unlimited")
+        print(f"继续执行 {len(test_cases)} 条用例，并发={concurrency or '不限'}", flush=True)
 
         # 创建 BatchSession + task registry + live files
         session = BatchSession(cases=test_cases, max_concurrency=concurrency)
@@ -302,6 +300,7 @@ async def _resume_benchmark(
             if ctx and ctx.result:
                 mgr.append_result(ctx.result)
             delete_live_file(task_id, case_id)
+            _print_progress(sess, case_id)
 
         session.on_progress = _on_progress
         for ctx in session.contexts.values():
@@ -364,6 +363,23 @@ def _avg_cell(stats: dict, precision: int = 2) -> str:
     return f"{average} （{graded}/{total} 条已评分）"
 
 
+def _print_progress(sess: BatchSession, case_id: str) -> None:
+    """One line per finished case — what a run shows by default, without -v."""
+    ctx = sess.contexts.get(case_id)
+    if not (ctx and ctx.result):
+        return
+    r = ctx.result
+    width = len(str(sess.total))
+    feedback = " ".join((r.eval.feedback or "").split())
+    if len(feedback) > 100:
+        feedback = feedback[:99] + "…"
+    seconds = (r.end - r.start).total_seconds()
+    print(
+        f"[{sess.completed:>{width}}/{sess.total}] {r.eval.result:<6} {r.eval.score:.2f} {seconds:6.1f}s  {case_id}  {feedback}",
+        flush=True,
+    )
+
+
 def _print_grouped_stats(stats_by_tag: dict, prefix: str, title: str) -> None:
     """打印特定 tag 前缀（如 hallu_type:）的分组统计，按 avg_score 降序。"""
     rows = [
@@ -377,10 +393,20 @@ def _print_grouped_stats(stats_by_tag: dict, prefix: str, title: str) -> None:
     print(f"\n按{title}统计:")
     print(f"  {'类别':<14} {'条数':>6}  {'通过率':>8}  {'未判成':>6}  平均分（已评分/总数）")
     for name, s in rows:
+        rate = f"{s['pass_rate']:>7.1%}" if _has_pass_fail(s) else f"{'—':>7}"
         print(
-            f"  {name:<14} {s['total']:>6}  {s['pass_rate']:>7.1%}"
+            f"  {name:<14} {s['total']:>6}  {rate}"
             f"  {s.get('error_count', 0):>6}  {_avg_cell(s, precision=3)}"
         )
+
+
+def _has_pass_fail(stats: dict) -> bool:
+    """A pass rate means something only where cases were graded pass / fail.
+
+    A continuously scored set (HealthBench, kg_qa) has neither, and its "通过率 0.0%"
+    read as every case failing.
+    """
+    return stats.get("pass_count", 0) + stats.get("fail_count", 0) > 0
 
 
 def _print_summary(report: BenchReport, report_path: Path) -> None:
@@ -394,10 +420,13 @@ def _print_summary(report: BenchReport, report_path: Path) -> None:
     target = report.runtime_target
     print(f"  被测系统:  {getattr(target, 'type', 'N/A')} ({getattr(target, 'model', 'N/A')})")
     print(f"  总用例:    {len(report.cases)}")
-    print(f"  通过:      {report.pass_count}")
-    print(f"  失败:      {report.fail_count}")
+    judged = report.pass_count + report.fail_count > 0
+    if judged:
+        print(f"  通过:      {report.pass_count}")
+        print(f"  失败:      {report.fail_count}")
     print(f"  未判成:    {report.error_count}")
-    print(f"  通过率:    {report.pass_rate:.1%}")
+    if judged:
+        print(f"  通过率:    {report.pass_rate:.1%}")
     summary = {"total": len(report.cases), "error_count": report.error_count, "avg_score": report.avg_score}
     print(f"  平均得分:  {_avg_cell(summary)}")
     print(f"  总耗时:    {report.total_duration_seconds:.1f}s")
@@ -410,8 +439,9 @@ def _print_summary(report: BenchReport, report_path: Path) -> None:
     if report.stats_by_tag:
         print("\n按标签统计（全部）:")
         for tag, stats in sorted(report.stats_by_tag.items()):
+            rate = f" 通过率 {stats['pass_rate']:.1%}," if _has_pass_fail(stats) else ""
             print(
-                f"  [{tag}] {stats['total']} 条, 通过率 {stats['pass_rate']:.1%},"
+                f"  [{tag}] {stats['total']} 条,{rate}"
                 f" 未判成 {stats.get('error_count', 0)} 条, 平均分 {_avg_cell(stats)}"
             )
 
@@ -510,12 +540,15 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="仅运行前 N 条用例")
     parser.add_argument("--parallel", "-p", type=int, default=0, help="最大并发数（默认不限制）")
     parser.add_argument("--resume", action="store_true", default=False, help="恢复上次未完成的评测（自动检测最近的检查点）")
-    parser.add_argument("-v", "--verbose", action="store_true", help="输出详细日志")
+    parser.add_argument(
+        "-v", "--verbose", action="count", default=0,
+        help="默认每题一行进度；-v 加上每轮对话与判分日志，-vv 再加调试日志",
+    )
 
     args = parser.parse_args()
 
     logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
+        level={0: logging.WARNING, 1: logging.INFO}.get(args.verbose, logging.DEBUG),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
