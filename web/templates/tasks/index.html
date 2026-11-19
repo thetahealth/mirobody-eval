@@ -485,40 +485,48 @@
                 </button>
             </div>
         </div>
-        <div class="divide-y divide-border" x-show="searchedReports.length > 0">
+        <div x-show="searchedReports.length > 0">
+            <div class="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_3.5rem_8rem_5.5rem_8rem_2rem] items-center gap-x-4 px-5 py-2 border-b border-border text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <span>Benchmark / Dataset</span>
+                <span>Model</span>
+                <span class="text-right">Cases</span>
+                <span>Avg score</span>
+                <span class="text-right">Cost</span>
+                <span class="text-right">Finished</span>
+                <span></span>
+            </div>
+            <div class="divide-y divide-border">
             <template x-for="r in pagedReports" :key="r.benchmark + ':' + r.filename">
-                <div class="px-5 py-3 flex items-center gap-4 table-row-hover group">
-                    <a :href="'/reports/' + r.benchmark + '/' + r.filename" class="flex items-center gap-4 flex-1 min-w-0">
-                        <span class="badge badge-success text-xs">completed</span>
-                        <div class="flex-1 min-w-0">
-                            <div class="flex items-center gap-2">
-                                <span class="text-sm font-medium" x-text="r.benchmark + ' / ' + r.dataset"></span>
-                                <span x-show="r.target_label" class="badge badge-outline text-[10px]" x-text="r.target_label"></span>
-                            </div>
-                            <div class="text-xs text-muted-foreground mt-0.5 flex flex-wrap gap-x-3">
-                                <span x-text="formatReportDate(r.date)"></span>
-                                <template x-if="r.case_count != null">
-                                    <span class="flex flex-wrap gap-x-3">
-                                        <span x-text="r.case_count + ' cases'"></span>
-                                        <span>avg <span class="font-medium text-foreground" x-text="r.avg_score == null ? '—' : r.avg_score.toFixed(2)"></span></span>
-                                        <span x-show="reportCost(r) > 0" x-text="_formatCost(reportCost(r))"></span>
-                                        <span x-show="r.error_count" class="text-warning-foreground" x-text="r.error_count + ' ungraded'"></span>
-                                    </span>
-                                </template>
-                            </div>
-                        </div>
-                        <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
-                            <span class="font-mono" x-text="r.filename"></span>
-                        </div>
+                <div class="grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_3.5rem_8rem_5.5rem_8rem_2rem] items-center gap-x-4 px-5 py-2.5 table-row-hover group" :title="r.filename">
+                    <a :href="'/reports/' + r.benchmark + '/' + r.filename" class="min-w-0">
+                        <div class="text-sm font-medium truncate"><span class="text-muted-foreground font-normal" x-text="r.benchmark + ' / '"></span><span x-text="r.dataset"></span></div>
                     </a>
+                    <a :href="'/reports/' + r.benchmark + '/' + r.filename" class="min-w-0">
+                        <div class="text-sm truncate" x-text="reportModel(r).name"></div>
+                        <div class="text-xs text-muted-foreground truncate" x-text="reportModel(r).via"></div>
+                    </a>
+                    <span class="text-sm text-right tabular-nums" x-text="r.case_count ?? '—'"></span>
+                    <div class="min-w-0">
+                        <div class="flex items-center gap-2">
+                            <span class="text-sm font-semibold tabular-nums w-9" x-text="r.avg_score == null ? '—' : r.avg_score.toFixed(2)"></span>
+                            <div class="h-1.5 flex-1 rounded-full bg-secondary overflow-hidden" x-show="r.avg_score != null">
+                                <div class="h-full rounded-full bg-blue-500" :style="`width: ${Math.round((r.avg_score || 0) * 100)}%`"></div>
+                            </div>
+                        </div>
+                        <div class="text-[11px] text-warning-foreground mt-0.5" x-show="r.error_count" x-text="r.error_count + ' ungraded'"></div>
+                    </div>
+                    <span class="text-sm text-right tabular-nums"
+                          :title="reportCost(r).unpriced.length ? 'No price in the table for: ' + reportCost(r).unpriced.join(', ') : ''"
+                          x-text="r.usage ? _costLabel(reportCost(r).usd, reportCost(r).unpriced) : '—'"></span>
+                    <span class="text-xs text-muted-foreground text-right tabular-nums whitespace-nowrap" x-text="formatReportDate(r.date)"></span>
                     <button @click.stop="deleteReport(r.benchmark, r.filename)"
-                            class="opacity-0 group-hover:opacity-100 p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all shrink-0"
+                            class="opacity-0 group-hover:opacity-100 p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-all justify-self-end"
                             title="Delete report">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0"/></svg>
                     </button>
                 </div>
             </template>
+            </div>
         </div>
         <div x-show="searchedReports.length > 0 && reportTotalPages > 1" class="px-5 py-2.5 border-t border-border flex items-center justify-between">
             <span class="text-xs text-muted-foreground" x-text="(Math.min(reportPage, reportTotalPages - 1) * reportPageSize + 1) + '-' + Math.min((Math.min(reportPage, reportTotalPages - 1) + 1) * reportPageSize, searchedReports.length) + ' of ' + searchedReports.length"></span>
@@ -1006,20 +1014,30 @@ function taskManager() {
         },
         formatTime(ts) { return ts ? new Date(ts).toLocaleString('en-US', { hour12: false }) : ''; },
         // USD for a report row, priced with the same table as the report page (cost_pricing.html).
+        // "deepseek:deepseek-flash" on llm_api → name "deepseek-flash", via "deepseek · llm_api"
+        reportModel(r) {
+            const m = (r.target_model || '').match(/^([a-z]+):(.+)$/);
+            const name = m ? m[2] : (r.target_model || r.target_type || r.target_label || '—');
+            const via = [m && m[1], r.target_model && r.target_type].filter(Boolean).join(' · ');
+            return { name, via };
+        },
         reportCost(r) {
             const u = r.usage;
-            if (!u) return 0;
-            return _calcUsageCost(u.test) + _calcUsageCost(u.target) + (u.target_api_cost || 0) + _calcUsageCost(u.eval);
+            if (!u) return { usd: 0, unpriced: [] };
+            return {
+                usd: _calcUsageCost(u.test) + _calcUsageCost(u.target) + (u.target_api_cost || 0) + _calcUsageCost(u.eval),
+                unpriced: [...new Set([u.test, u.target, u.eval].flatMap(_unpricedModels))],
+            };
         },
         formatReportDate(d) {
             // d = "20260212" or "20260212_142012"
             if (!d) return '';
             const y = d.slice(0, 4), m = d.slice(4, 6), day = d.slice(6, 8);
             if (d.length > 8) {
-                const hh = d.slice(9, 11), mm = d.slice(11, 13), ss = d.slice(13, 15);
-                return `${y}/${m}/${day} ${hh}:${mm}:${ss}`;
+                const hh = d.slice(9, 11), mm = d.slice(11, 13);
+                return `${y}-${m}-${day} ${hh}:${mm}`;
             }
-            return `${y}/${m}/${day}`;
+            return `${y}-${m}-${day}`;
         },
         destroy() { if (this.pollTimer) clearInterval(this.pollTimer); }
     };

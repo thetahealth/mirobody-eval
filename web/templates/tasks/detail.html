@@ -55,6 +55,7 @@
             <div class="text-xs text-muted-foreground mb-1">Total Cost</div>
             <div class="text-2xl font-semibold" x-text="stats.totalCostLabel"></div>
             <div class="text-xs text-muted-foreground mt-1" x-show="stats.totalTokens > 0" x-text="stats.totalTokens.toLocaleString() + ' tokens'"></div>
+            <div class="text-xs text-warning-foreground mt-1 truncate cursor-help" x-show="stats.unpricedModels.length" :title="'No price in the table for: ' + stats.unpricedModels.join(', ')" x-text="stats.unpricedModels.length + (stats.unpricedModels.length > 1 ? ' models' : ' model') + ' unpriced'"></div>
         </div>
     </div>
 
@@ -273,7 +274,7 @@ function taskDetail(taskId) {
         stats: {
             pass: 0, fail: 0, scored: 0, error: 0, gradedCount: 0, hasJudged: false,
             avgScore: '-', passRate: '-',
-            totalDuration: '-', totalCostLabel: '—', totalTokens: 0,
+            totalDuration: '-', totalCostLabel: '—', totalTokens: 0, unpricedModels: [],
             costByRole: { test: '—', target: '—', eval: '—', testVal: 0, targetVal: 0, evalVal: 0 },
         },
         meta: { targetFields: [], evalType: '', concurrency: '' },
@@ -420,6 +421,7 @@ function taskDetail(taskId) {
             } else {
                 const agg = _aggregateCosts(costSources);
                 this.stats.totalCostLabel = agg.totalCostLabel;
+                this.stats.unpricedModels = agg.unpricedModels;
                 this.stats.totalTokens = agg.totalTokens;
                 this.stats.costByRole = agg.costByRole;
             }

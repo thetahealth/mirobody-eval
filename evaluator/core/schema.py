@@ -888,6 +888,8 @@ class ReportEntry(BaseModel):
     filename: str
     target_label: str = ""
     # Summary for the report list; None when the file could not be read.
+    target_type: str | None = Field(None, description="`runtime_target.type` of the run, e.g. llm_api")
+    target_model: str | None = Field(None, description="`runtime_target.model`, as written for the run")
     case_count: int | None = None
     avg_score: float | None = Field(None, description="Mean score over graded cases; `error` cases are excluded")
     error_count: int | None = Field(None, description="Cases that never got a grade (timeout, judge outage, ...)")

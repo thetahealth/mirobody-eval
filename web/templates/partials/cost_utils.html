@@ -16,11 +16,15 @@ function _sumTokens(usageDict, field) {
 /** Aggregate statistics from a list of cost objects */
 function _aggregateCosts(costList) {
     let costTest = 0, costTarget = 0, costEval = 0, totalTokens = 0;
+    const unpriced = new Set();
     for (const cost of costList) {
         if (!cost) continue;
         costTest += _calcUsageCost(cost.test);
         costTarget += _targetCostFromDetail(cost);
         costEval += _calcUsageCost(cost.eval);
+        _unpricedModels(cost.test).forEach(m => unpriced.add(m));
+        _unpricedModels(cost.eval).forEach(m => unpriced.add(m));
+        if (cost.target_detail?.total_cost == null) _unpricedModels(cost.target).forEach(m => unpriced.add(m));
         // target tokens: sum sub-agent tokens when breakdown is available
         let targetTokens = 0;
         const bd = cost.target_detail?.breakdown;
@@ -35,7 +39,8 @@ function _aggregateCosts(costList) {
     }
     const totalCost = costTest + costTarget + costEval;
     return {
-        totalCostLabel: _formatCost(totalCost),
+        totalCostLabel: _costLabel(totalCost, [...unpriced]),
+        unpricedModels: [...unpriced],
         totalTokens,
         costByRole: {
             test: _formatCost(costTest),
