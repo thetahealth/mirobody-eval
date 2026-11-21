@@ -6,6 +6,7 @@ Versions are git tags on `main` (`0.1.0`, `0.2.0`, …). Each entry links the pu
 
 ### Web UI
 
+- In a reply's tool-call list, consecutive calls to the same tool are one row (`28–43  query_duckdb  ×16`) that opens to the calls. Every call is still listed with its own step number; the report data is unchanged ([#37](https://github.com/thetahealth/mirobody-eval/pull/37)).
 - The report list is a table: benchmark / dataset, model, cases, average score, cost, finish time. The internal target label, the always-`completed` badge and the raw filename are gone from the row; the filename still searches and shows on hover ([#33](https://github.com/thetahealth/mirobody-eval/pull/33)).
 - A model missing from the price table is no longer priced as gpt-4.1. A total that leaves one out reads `—` or `≥ $x`, and the report page says how many models are unpriced. `provider:` and `openai/` prefixes are looked up by the bare model ([#33](https://github.com/thetahealth/mirobody-eval/pull/33)).
 
