@@ -333,7 +333,7 @@ mirobody-eval/
 |---|---|---|---|
 | **HealthBench** | [OpenAI HealthBench](https://arxiv.org/abs/2505.07469) | `sample`（100）、`full`、`hard`、`consensus` | 医疗 AI 质量 |
 | **MedCalc-Bench** | [MedCalc-Bench](https://arxiv.org/abs/2406.12036) | `sample`、`full` | 医学计算 |
-| **ESLBench** | [arXiv:2604.02834](https://arxiv.org/abs/2604.02834) | `sample50-20260331`（50）、`sample500-20260331`（500）、`full-20260331`（4500） | 纵向健康推理 |
+| **ESLBench** | [arXiv:2604.02834](https://arxiv.org/abs/2604.02834) | `sample50-20260331`（50）、`sample500-20260331`（500）、`full-20260331`（4500）、`demo-events-20260930`（11） | 纵向健康推理 |
 | **ESLBench-Distractor** | —— | `sample`（60）、`distractor-behavioral-20260723`（120）、`distractor-computable-20260723`（400） | 对干扰上下文的稳健性（复用 ESLBench 已准备好的数据） |
 | **Virtual User** | —— | `round1`（15）、`round2`（60） | 开场白的互动质量 |
 
@@ -381,6 +381,13 @@ uv run python -m benchmark.basic_runner eslbench full-20260331 --target-type llm
 ```
 
 被测的 LLM 会拿到一组工具（`eslbench/retrieve`）：读 JSON 文件、查 DuckDB、查指标——它必须用这些工具在用户的健康数据里找答案。
+
+**日常事件问题（演示题集）。** `demo-events-20260930` 有 11 道题，问法就是普通人问自己数据的口吻：*「10 月下旬以后那几周我打鼾比之前多，为什么？」*、*「我怀疑是那次结婚纪念日晚餐，真是它吗？」*、*「2024 年 1 月 13 日开始吃泼尼松以后，数据里看得出这药该有的作用吗？」*（题面为英文）。题型包括：某个读数为什么变了、用户自己猜错了原因、药有没有起到该有的作用、生病时哪些读数能看出来、以及其实没发生的变化。六个用户都是合成用户（批次 `202609`），每道题的答案都按模型能看到的读数和日记事件核对过：
+
+```bash
+uv run python -m generator.eslbench.prepare_data --dataset demo-events-20260930   # 6 个用户
+uv run python -m benchmark.basic_runner eslbench demo-events-20260930 --target-type llm_api --target-model gpt-5.4-mini
+```
 
 ### 新增一个基准
 

@@ -359,7 +359,7 @@ mirobody-eval/
 |---|---|---|---|
 | **HealthBench** | [OpenAI HealthBench](https://arxiv.org/abs/2505.07469) | `sample` (100), `full`, `hard`, `consensus` | Medical AI quality |
 | **MedCalc-Bench** | [MedCalc-Bench](https://arxiv.org/abs/2406.12036) | `sample`, `full` | Medical calculations |
-| **ESLBench** | [arXiv:2604.02834](https://arxiv.org/abs/2604.02834) | `sample50-20260331` (50), `sample500-20260331` (500), `full-20260331` (4500) | Longitudinal health reasoning |
+| **ESLBench** | [arXiv:2604.02834](https://arxiv.org/abs/2604.02834) | `sample50-20260331` (50), `sample500-20260331` (500), `full-20260331` (4500), `demo-events-20260930` (11) | Longitudinal health reasoning |
 | **ESLBench-Distractor** | — | `sample` (60), `distractor-behavioral-20260723` (120), `distractor-computable-20260723` (400) | Robustness to distractor context (shares ESLBench's prepared data) |
 | **Virtual User** | — | `round1` (15), `round2` (60) | Opening-line engagement |
 
@@ -407,6 +407,13 @@ uv run python -m benchmark.basic_runner eslbench full-20260331 --target-type llm
 ```
 
 The LLM target is equipped with a tool group (`eslbench/retrieve`) that provides JSON file reading, DuckDB queries, and indicator lookup — the LLM must use these tools to find answers in the user's health data.
+
+**Everyday event questions (demo set).** `demo-events-20260930` holds 11 questions phrased the way a person asks about their own data: *"My snoring rate was higher in the weeks after late October 2025 than before. Why was that?"*, *"I suspect it was our anniversary dinner. Was that really what did it?"*, *"After I started prednisone on January 13, 2024, does my data show the effect the medicine is expected to have?"* They cover why a reading changed, a wrong suspect offered by the user, whether a medicine had its expected effect, which readings show an illness, and a change that did not happen. All six users are synthetic (batch `202609`), and each answer was checked against the readings and diary events the model can see:
+
+```bash
+uv run python -m generator.eslbench.prepare_data --dataset demo-events-20260930   # 6 users
+uv run python -m benchmark.basic_runner eslbench demo-events-20260930 --target-type llm_api --target-model gpt-5.4-mini
+```
 
 ### Add a new benchmark
 

@@ -4,6 +4,10 @@ Versions are git tags on `main` (`0.1.0`, `0.2.0`, …). Each entry links the pu
 
 ## Unreleased
 
+### ESL-Bench
+
+- New dataset `demo-events-20260930`: 11 questions about life events, phrased the way a person asks about their own data (why a reading changed, a wrong suspect, a medicine's expected effect, which readings show an illness, a change that did not happen), on six synthetic users from batch `202609`. Each answer was checked against the readings and diary events the model can see.
+
 ### Web UI
 
 - The report list is a table: benchmark / dataset, model, cases, average score, cost, finish time. The internal target label, the always-`completed` badge and the raw filename are gone from the row; the filename still searches and shows on hover ([#33](https://github.com/thetahealth/mirobody-eval/pull/33)).
