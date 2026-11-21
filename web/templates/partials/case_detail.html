@@ -140,7 +140,7 @@
                         <div x-show="msg.time" class="text-[10px] text-muted-foreground mt-1.5" x-text="msg.time"></div>
                         <!-- How the reply was produced: its tool calls as a collapsed step list under the answer -->
                         <template x-if="msg.tool_calls && msg.tool_calls.length > 0">
-                            <div x-data="{ open: false, step: null, full: {} }" class="mt-2.5 pt-2 border-t border-border">
+                            <div x-data="{ open: false, step: null, full: {}, runs: {} }" class="mt-2.5 pt-2 border-t border-border">
                                 <button @click="open = !open" class="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors">
                                     <svg class="w-3 h-3 transition-transform" :class="open && 'rotate-90'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/>
@@ -148,31 +148,48 @@
                                     <span x-text="msg.tool_calls.length + ' tool call' + (msg.tool_calls.length > 1 ? 's' : '')"></span>
                                 </button>
                                 <ol x-show="open" class="mt-1.5 space-y-1">
-                                    <template x-for="(tc, ti) in msg.tool_calls" :key="ti">
-                                        <li class="rounded-md border border-border bg-background/60">
-                                            <button @click="step = step === ti ? null : ti"
-                                                    class="w-full flex items-baseline gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-muted/50 transition-colors">
-                                                <span class="w-4 shrink-0 text-right tabular-nums text-muted-foreground" x-text="ti + 1"></span>
-                                                <span class="shrink-0 font-mono font-medium" x-text="tc.name"></span>
-                                                <span class="min-w-0 flex-1 truncate font-mono text-muted-foreground" x-text="toolArgsSummary(tc)"></span>
-                                                <span class="shrink-0 text-muted-foreground">→</span>
-                                                <span class="min-w-0 max-w-[40%] truncate" x-text="toolResultSummary(tc)"></span>
+                                    <!-- A run of consecutive calls to one tool is one row ("query_duckdb ×16") that opens to its calls -->
+                                    <template x-for="run in toolCallRuns(msg.tool_calls)" :key="run.start">
+                                        <li>
+                                            <button x-show="run.calls.length > 1" @click="runs = { ...runs, [run.start]: !runs[run.start] }"
+                                                    class="w-full flex items-baseline gap-2 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-left text-xs hover:bg-muted/50 transition-colors">
+                                                <span class="w-10 shrink-0 whitespace-nowrap text-right tabular-nums text-muted-foreground" x-text="(run.start + 1) + '–' + (run.start + run.calls.length)"></span>
+                                                <span class="shrink-0 font-mono font-medium" x-text="run.name"></span>
+                                                <span class="shrink-0 rounded bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground" x-text="'×' + run.calls.length"></span>
+                                                <span class="min-w-0 flex-1"></span>
+                                                <svg class="w-3 h-3 shrink-0 self-center text-muted-foreground transition-transform" :class="runs[run.start] && 'rotate-90'" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5"/>
+                                                </svg>
                                             </button>
-                                            <div x-show="step === ti" class="border-t border-border px-3 py-2.5 space-y-2.5 text-xs">
-                                                <div>
-                                                    <div class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground mb-1">Arguments</div>
-                                                    <pre class="code-block whitespace-pre-wrap break-words max-h-64 overflow-y-auto" x-text="toolArgsDetail(tc)"></pre>
-                                                </div>
-                                                <div>
-                                                    <div class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground mb-1"
-                                                         x-text="'Result · ' + toolResultLines(tc).length + ' lines'"></div>
-                                                    <pre class="code-block whitespace-pre-wrap break-words max-h-96 overflow-y-auto"
-                                                         x-text="(full[ti] ? toolResultLines(tc) : toolResultLines(tc).slice(0, 30)).join('\n')"></pre>
-                                                    <button x-show="toolResultLines(tc).length > 30 && !full[ti]" @click="full = { ...full, [ti]: true }"
-                                                            class="mt-1 text-[11px] text-primary hover:underline"
-                                                            x-text="'Show all ' + toolResultLines(tc).length + ' lines'"></button>
-                                                </div>
-                                            </div>
+                                            <ol x-show="run.calls.length === 1 || runs[run.start]" class="space-y-1" :class="run.calls.length > 1 && 'mt-1 ml-5'">
+                                                <template x-for="(tc, j) in run.calls" :key="run.start + j">
+                                                <li x-data="{ ti: run.start + j }" class="rounded-md border border-border bg-background/60">
+                                                    <button @click="step = step === ti ? null : ti"
+                                                            class="w-full flex items-baseline gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-muted/50 transition-colors">
+                                                        <span class="w-10 shrink-0 whitespace-nowrap text-right tabular-nums text-muted-foreground" x-text="ti + 1"></span>
+                                                        <span class="shrink-0 font-mono font-medium" x-text="tc.name"></span>
+                                                        <span class="min-w-0 flex-1 truncate font-mono text-muted-foreground" x-text="toolArgsSummary(tc)"></span>
+                                                        <span class="shrink-0 text-muted-foreground">→</span>
+                                                        <span class="min-w-0 max-w-[40%] truncate" x-text="toolResultSummary(tc)"></span>
+                                                    </button>
+                                                    <div x-show="step === ti" class="border-t border-border px-3 py-2.5 space-y-2.5 text-xs">
+                                                        <div>
+                                                            <div class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground mb-1">Arguments</div>
+                                                            <pre class="code-block whitespace-pre-wrap break-words max-h-64 overflow-y-auto" x-text="toolArgsDetail(tc)"></pre>
+                                                        </div>
+                                                        <div>
+                                                            <div class="text-[10px] font-medium uppercase tracking-wide text-muted-foreground mb-1"
+                                                                 x-text="'Result · ' + toolResultLines(tc).length + ' lines'"></div>
+                                                            <pre class="code-block whitespace-pre-wrap break-words max-h-96 overflow-y-auto"
+                                                                 x-text="(full[ti] ? toolResultLines(tc) : toolResultLines(tc).slice(0, 30)).join('\n')"></pre>
+                                                            <button x-show="toolResultLines(tc).length > 30 && !full[ti]" @click="full = { ...full, [ti]: true }"
+                                                                    class="mt-1 text-[11px] text-primary hover:underline"
+                                                                    x-text="'Show all ' + toolResultLines(tc).length + ' lines'"></button>
+                                                        </div>
+                                                    </div>
+                                                </li>
+                                                </template>
+                                            </ol>
                                         </li>
                                     </template>
                                 </ol>
