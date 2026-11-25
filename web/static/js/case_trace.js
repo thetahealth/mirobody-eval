@@ -46,6 +46,18 @@
     return [code, rest].filter(Boolean).join("\n\n") || "()";
   };
 
+  // Consecutive calls to the same tool, as runs: [{ start, name, calls }]. An agent often
+  // calls one tool many times in a row with different arguments (paging, fixing a query);
+  // the step list shows such a run as one row that opens to its calls. Nothing is dropped
+  // or merged across a different tool in between; `start` is the 0-based index of the
+  // run's first call, so each call keeps its own step number.
+  window.toolCallRuns = (calls) => (calls || []).reduce((runs, tc, i) => {
+    const last = runs[runs.length - 1];
+    if (last && last.name === tc.name) last.calls.push(tc);
+    else runs.push({ start: i, name: tc.name, calls: [tc] });
+    return runs;
+  }, []);
+
   // Result for the expanded step, one entry per line (JSON indented first).
   window.toolResultLines = (tc) => {
     const r = String(tc?.result ?? "");
