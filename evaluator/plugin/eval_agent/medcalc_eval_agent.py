@@ -348,9 +348,9 @@ class MedCalcEvalAgent(AbstractEvalAgent, name="medcalc", params_model=MedCalcEv
 
     @staticmethod
     def _normalize_weeks_days(text: str) -> Optional[tuple[int, int]]:
-        """Normalize "X weeks, Y days" to (weeks, days) tuple"""
+        """Normalize "X weeks, Y days" or MedCalc-Bench's "('X weeks', 'Y days')" to (weeks, days) tuple"""
         text = text.lower().strip()
-        match = re.search(r"(\d+)\s*weeks?\s*[,\s]*(\d+)\s*days?", text)
+        match = re.search(r"(\d+)\s*weeks?\W*(\d+)\s*days?", text)
         if match:
             return int(match.group(1)), int(match.group(2))
         return None
